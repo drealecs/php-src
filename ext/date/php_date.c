@@ -1679,20 +1679,20 @@ PHPAPI void php_strftime(INTERNAL_FUNCTION_PARAMETERS, int gmt)
 	ta.tm_yday  = timelib_day_of_year(ts->y, ts->m, ts->d);
 	if (gmt) {
 		ta.tm_isdst = 0;
-#if HAVE_TM_GMTOFF
+#if HAVE_STRUCT_TM_TM_GMTOFF
 		ta.tm_gmtoff = 0;
 #endif
-#if HAVE_TM_ZONE
+#if HAVE_STRUCT_TM_TM_ZONE
 		ta.tm_zone = "GMT";
 #endif
 	} else {
 		offset = timelib_get_time_zone_info(timestamp, tzi);
 
 		ta.tm_isdst = offset->is_dst;
-#if HAVE_TM_GMTOFF
+#if HAVE_STRUCT_TM_TM_GMTOFF
 		ta.tm_gmtoff = offset->offset;
 #endif
-#if HAVE_TM_ZONE
+#if HAVE_STRUCT_TM_TM_ZONE
 		ta.tm_zone = offset->abbr;
 #endif
 	}
@@ -4375,12 +4375,21 @@ PHP_FUNCTION(date_interval_create_from_date_string)
 		Z_PARAM_STR(time_str)
 	ZEND_PARSE_PARAMETERS_END_EX(RETURN_FALSE);
 
-	php_date_instantiate(date_ce_interval, return_value);
-
 	time = timelib_strtotime(ZSTR_VAL(time_str), ZSTR_LEN(time_str), &err, DATE_TIMEZONEDB, php_date_parse_tzfile_wrapper);
+
+	if (err->error_count > 0)  {
+		php_error_docref(NULL, E_WARNING, "Unknown or bad format (%s) at position %d (%c): %s", ZSTR_VAL(time_str),
+			err->error_messages[0].position, err->error_messages[0].character ? err->error_messages[0].character : ' ', err->error_messages[0].message);
+		RETVAL_FALSE;
+		goto cleanup;
+	}
+
+	php_date_instantiate(date_ce_interval, return_value);
 	diobj = Z_PHPINTERVAL_P(return_value);
 	diobj->diff = timelib_rel_time_clone(&time->relative);
 	diobj->initialized = 1;
+
+cleanup:
 	timelib_time_dtor(time);
 	timelib_error_container_dtor(err);
 }

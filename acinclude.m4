@@ -160,7 +160,7 @@ EOF
     eval echo "$i = \$$i" >> Makefile
   done
 
-  cat $abs_srcdir/Makefile.global Makefile.fragments Makefile.objects >> Makefile
+  cat $abs_srcdir/build/Makefile.global Makefile.fragments Makefile.objects >> Makefile
 ])
 
 dnl
@@ -270,25 +270,6 @@ EOF
 dnl -------------------------------------------------------------------------
 dnl Compiler characteristics checks
 dnl -------------------------------------------------------------------------
-
-dnl
-dnl PHP_TARGET_RDYNAMIC
-dnl
-dnl Checks whether -rdynamic is supported by the compiler.  This
-dnl is necessary for some targets to populate the global symbol
-dnl table.  Otherwise, dynamic modules would not be able to resolve
-dnl PHP-related symbols.
-dnl
-dnl If successful, adds -rdynamic to PHP_LDFLAGS.
-dnl
-AC_DEFUN([PHP_TARGET_RDYNAMIC],[
-  if test -n "$GCC"; then
-    PHP_CHECK_GCC_ARG(-rdynamic, gcc_rdynamic=yes)
-    if test "$gcc_rdynamic" = "yes"; then
-      PHP_LDFLAGS="$PHP_LDFLAGS -rdynamic"
-    fi
-  fi
-])
 
 dnl
 dnl PHP_RUNPATH_SWITCH
@@ -833,15 +814,11 @@ dnl from object_var in build-dir.
 dnl
 AC_DEFUN([PHP_SHARED_MODULE],[
   install_modules="install-modules"
+  suffix=la
 
   case $host_alias in
     *aix*[)]
-      suffix=so
-      link_cmd='$(LIBTOOL) --mode=link ifelse($4,,[$(CC)],[$(CXX)]) $(COMMON_FLAGS) $(CFLAGS_CLEAN) $(EXTRA_CFLAGS) $(LDFLAGS) -Wl,-G -o '$3'/$1.la -export-dynamic -avoid-version -prefer-pic -module -rpath $(phplibdir) $(EXTRA_LDFLAGS) $($2) $(translit($1,a-z_-,A-Z__)_SHARED_LIBADD) && mv -f '$3'/.libs/$1.so '$3'/$1.so'
-      ;;
-    *[)]
-      suffix=la
-      link_cmd='$(LIBTOOL) --mode=link ifelse($4,,[$(CC)],[$(CXX)]) $(COMMON_FLAGS) $(CFLAGS_CLEAN) $(EXTRA_CFLAGS) $(LDFLAGS) -o [$]@ -export-dynamic -avoid-version -prefer-pic -module -rpath $(phplibdir) $(EXTRA_LDFLAGS) $($2) $(translit($1,a-z_-,A-Z__)_SHARED_LIBADD)'
+      additional_flags="-Wl,-G"
       ;;
   esac
 
@@ -856,7 +833,7 @@ AC_DEFUN([PHP_SHARED_MODULE],[
 	\$(LIBTOOL) --mode=install cp $3/$1.$suffix \$(phplibdir)
 
 $3/$1.$suffix: \$($2) \$(translit($1,a-z_-,A-Z__)_SHARED_DEPENDENCIES)
-	$link_cmd
+	\$(LIBTOOL) --mode=link ifelse($4,,[\$(CC)],[\$(CXX)]) \$(COMMON_FLAGS) \$(CFLAGS_CLEAN) \$(EXTRA_CFLAGS) \$(LDFLAGS) $additional_flags -o [\$]@ -export-dynamic -avoid-version -prefer-pic -module -rpath \$(phplibdir) \$(EXTRA_LDFLAGS) \$($2) \$(translit($1,a-z_-,A-Z__)_SHARED_LIBADD)
 
 EOF
 ])
@@ -903,17 +880,6 @@ AC_DEFUN([PHP_SELECT_SAPI],[
     install_sapi="install-sapi"
     ifelse($3,,,[PHP_ADD_SOURCES([sapi/$1],[$3],[$4],[sapi])])
   ])
-])
-
-dnl deprecated
-AC_DEFUN([PHP_EXTENSION],[
-  sources=`$AWK -f $abs_srcdir/build/scan_makefile_in.awk < []PHP_EXT_SRCDIR($1)[]/Makefile.in`
-
-  PHP_NEW_EXTENSION($1, $sources, $2, $3)
-
-  if test -r "$ext_srcdir/Makefile.frag"; then
-    PHP_ADD_MAKEFILE_FRAGMENT
-  fi
 ])
 
 AC_DEFUN([PHP_ADD_BUILD_DIR],[
@@ -1044,12 +1010,6 @@ dnl -------------------------------------------------------------------------
 
 dnl Internal helper macros
 dnl
-dnl _PHP_DEF_HAVE_FILE(what, filename)
-AC_DEFUN([_PHP_DEF_HAVE_FILE], [
-  php_def_have_what=HAVE_[]`echo $1 | tr 'abcdefghijklmnopqrstuvwxyz-' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ_' `
-  echo "#define $php_def_have_what 1" >> $2
-])
-dnl
 dnl _PHP_CHECK_SIZEOF(type, cross-value, extra-headers [, found-action [, not-found-action]])
 dnl
 AC_DEFUN([_PHP_CHECK_SIZEOF], [
@@ -1060,10 +1020,8 @@ AC_DEFUN([_PHP_CHECK_SIZEOF], [
     old_LDFLAGS=$LDFLAGS
     LDFLAGS=
     AC_RUN_IFELSE([AC_LANG_SOURCE([[#include <stdio.h>
-#if STDC_HEADERS
 #include <stdlib.h>
 #include <stddef.h>
-#endif
 #ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
 #endif
@@ -1108,21 +1066,6 @@ AC_DEFUN([PHP_CHECK_SIZEOF], [
 ])
 
 dnl
-dnl PHP_CHECK_TYPES(type-list, include-file [, extra-headers])
-dnl
-AC_DEFUN([PHP_CHECK_TYPES], [
-  for php_typename in $1; do
-    AC_MSG_CHECKING([whether $php_typename exists])
-    _PHP_CHECK_SIZEOF($php_typename, 0, $3, [
-      _PHP_DEF_HAVE_FILE($php_typename, $2)
-      AC_MSG_RESULT([yes])
-    ], [
-      AC_MSG_RESULT([no])
-    ])
-  done
-])
-
-dnl
 dnl PHP_CHECK_IN_ADDR_T
 dnl
 AC_DEFUN([PHP_CHECK_IN_ADDR_T], [
@@ -1133,10 +1076,8 @@ AC_CACHE_VAL(ac_cv_type_in_addr_t,
 changequote(<<,>>)dnl
 <<in_addr_t[^a-zA-Z_0-9]>>dnl
 changequote([,]), [#include <sys/types.h>
-#if STDC_HEADERS
 #include <stdlib.h>
 #include <stddef.h>
-#endif
 #ifdef HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif], ac_cv_type_in_addr_t=yes, ac_cv_type_in_addr_t=no)])dnl
@@ -1397,20 +1338,6 @@ int readdir_r(DIR *, struct dirent *);
 ])
 
 dnl
-dnl PHP_TM_GMTOFF
-dnl
-AC_DEFUN([PHP_TM_GMTOFF],[
-AC_CACHE_CHECK([for tm_gmtoff in struct tm], ac_cv_struct_tm_gmtoff,
-[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <sys/types.h>
-#include <time.h>]], [[struct tm tm; tm.tm_gmtoff;]])],
-  [ac_cv_struct_tm_gmtoff=yes], [ac_cv_struct_tm_gmtoff=no])])
-
-if test "$ac_cv_struct_tm_gmtoff" = yes; then
-  AC_DEFINE(HAVE_TM_GMTOFF,1,[whether you have tm_gmtoff in struct tm])
-fi
-])
-
-dnl
 dnl PHP_STRUCT_FLOCK
 dnl
 AC_DEFUN([PHP_STRUCT_FLOCK],[
@@ -1466,141 +1393,6 @@ AC_DEFUN([PHP_MISSING_FCLOSE_DECL],[
 ])
 
 dnl
-dnl PHP_AC_BROKEN_SPRINTF
-dnl
-dnl Check for broken sprintf(), C99 conformance
-dnl
-AC_DEFUN([PHP_AC_BROKEN_SPRINTF],[
-  AC_CACHE_CHECK(whether sprintf is broken, ac_cv_broken_sprintf,[
-    AC_RUN_IFELSE([AC_LANG_SOURCE([[main() {char buf[20];exit(sprintf(buf,"testing 123")!=11); }]])],[
-      ac_cv_broken_sprintf=no
-    ],[
-      ac_cv_broken_sprintf=yes
-    ],[
-      ac_cv_broken_sprintf=no
-    ])
-  ])
-  if test "$ac_cv_broken_sprintf" = "yes"; then
-    AC_DEFINE(PHP_BROKEN_SPRINTF, 1, [Whether sprintf is C99 conform])
-  else
-    AC_DEFINE(PHP_BROKEN_SPRINTF, 0, [Whether sprintf is C99 conform])
-  fi
-])
-
-dnl
-dnl PHP_AC_BROKEN_SNPRINTF
-dnl
-dnl Check for broken snprintf(), C99 conformance
-dnl
-AC_DEFUN([PHP_AC_BROKEN_SNPRINTF],[
-  AC_CACHE_CHECK(whether snprintf is broken, ac_cv_broken_snprintf,[
-    AC_RUN_IFELSE([AC_LANG_SOURCE([[
-#define NULL (0L)
-main() {
-  char buf[20];
-  int res = 0;
-  res = res || (snprintf(buf, 2, "marcus") != 6);
-  res = res || (buf[1] != '\0');
-  /* Implementations may consider this as an encoding error */
-  snprintf(buf, 0, "boerger");
-  /* However, they MUST ignore the pointer */
-  res = res || (buf[0] != 'm');
-  res = res || (snprintf(NULL, 0, "boerger") != 7);
-  res = res || (snprintf(buf, sizeof(buf), "%f", 0.12345678) != 8);
-  exit(res);
-}
-    ]])],[
-      ac_cv_broken_snprintf=no
-    ],[
-      ac_cv_broken_snprintf=yes
-    ],[
-      ac_cv_broken_snprintf=no
-    ])
-  ])
-  if test "$ac_cv_broken_snprintf" = "yes"; then
-    AC_DEFINE(PHP_BROKEN_SNPRINTF, 1, [Whether snprintf is C99 conform])
-  else
-    AC_DEFINE(PHP_BROKEN_SNPRINTF, 0, [Whether snprintf is C99 conform])
-  fi
-])
-
-dnl
-dnl PHP_SOLARIS_PIC_WEIRDNESS
-dnl
-dnl Solaris requires main code to be position independent in order
-dnl to let shared objects find symbols.  Weird.  Ugly.
-dnl
-dnl Must be run after all --with-NN options that let the user
-dnl choose dynamic extensions, and after the gcc test.
-dnl
-AC_DEFUN([PHP_SOLARIS_PIC_WEIRDNESS],[
-  AC_MSG_CHECKING([whether -fPIC is required])
-  if test -n "$EXT_SHARED"; then
-    os=`uname -sr 2>/dev/null`
-    case $os in
-      "SunOS 5.6"|"SunOS 5.7"[)]
-        case $CC in
-          gcc*|egcs*)
-            CFLAGS="$CFLAGS -fPIC";;
-          *[)]
-            CFLAGS="$CFLAGS -fpic";;
-        esac
-        AC_MSG_RESULT([yes]);;
-      *[)]
-        AC_MSG_RESULT([no]);;
-    esac
-  else
-    AC_MSG_RESULT([no])
-  fi
-])
-
-dnl
-dnl PHP_SYS_LFS
-dnl
-dnl The problem is that the default compilation flags in Solaris 2.6 won't
-dnl let programs access large files;  you need to tell the compiler that
-dnl you actually want your programs to work on large files.  For more
-dnl details about this brain damage please see:
-dnl http://www.sas.com/standards/large.file/x_open.20Mar96.html
-dnl
-dnl Written by Paul Eggert <eggert@twinsun.com>.
-dnl
-AC_DEFUN([PHP_SYS_LFS],
-[dnl
-  # If available, prefer support for large files unless the user specified
-  # one of the CPPFLAGS, LDFLAGS, or LIBS variables.
-  AC_MSG_CHECKING([whether large file support needs explicit enabling])
-  ac_getconfs=''
-  ac_result=yes
-  ac_set=''
-  ac_shellvars='CPPFLAGS LDFLAGS LIBS'
-  for ac_shellvar in $ac_shellvars; do
-    case $ac_shellvar in
-      CPPFLAGS[)] ac_lfsvar=LFS_CFLAGS ;;
-      *[)] ac_lfsvar=LFS_$ac_shellvar ;;
-    esac
-    eval test '"${'$ac_shellvar'+set}"' = set && ac_set=$ac_shellvar
-    (getconf $ac_lfsvar) >/dev/null 2>&1 || { ac_result=no; break; }
-    ac_getconf=`getconf $ac_lfsvar`
-    ac_getconfs=$ac_getconfs$ac_getconf
-    eval ac_test_$ac_shellvar=\$ac_getconf
-  done
-  case "$ac_result$ac_getconfs" in
-    yes[)] ac_result=no ;;
-  esac
-  case "$ac_result$ac_set" in
-    yes?*[)] ac_result="yes, but $ac_set is already set, so use its settings"
-  esac
-  AC_MSG_RESULT([$ac_result])
-  case $ac_result in
-    yes[)]
-      for ac_shellvar in $ac_shellvars; do
-        eval $ac_shellvar=\$ac_test_$ac_shellvar
-      done ;;
-  esac
-])
-
-dnl
 dnl PHP_SOCKADDR_CHECKS
 dnl
 AC_DEFUN([PHP_SOCKADDR_CHECKS], [
@@ -1622,29 +1414,6 @@ AC_DEFUN([PHP_SOCKADDR_CHECKS], [
   ])
   if test "$ac_cv_sockaddr_sa_len" = "yes"; then
     AC_DEFINE(HAVE_SOCKADDR_SA_LEN, 1, [Whether struct sockaddr has field sa_len])
-  fi
-])
-
-dnl
-dnl PHP_DECLARED_TIMEZONE
-dnl
-AC_DEFUN([PHP_DECLARED_TIMEZONE],[
-  AC_CACHE_CHECK(for declared timezone, ac_cv_declared_timezone,[
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-#include <sys/types.h>
-#include <time.h>
-#ifdef HAVE_SYS_TIME_H
-#include <sys/time.h>
-#endif
-]],[[
-    time_t foo = (time_t) timezone;
-]])],[
-  ac_cv_declared_timezone=yes
-],[
-  ac_cv_declared_timezone=no
-])])
-  if test "$ac_cv_declared_timezone" = "yes"; then
-    AC_DEFINE(HAVE_DECLARED_TIMEZONE, 1, [Whether system headers declare timezone])
   fi
 ])
 
@@ -2844,7 +2613,6 @@ AC_DEFUN([PHP_CHECK_STDINT_TYPES], [
 # include <sys/types.h>
 #endif
   ])
-  AC_DEFINE([PHP_HAVE_STDINT_TYPES], [1], [Checked for stdint types])
 ])
 
 dnl PHP_CHECK_BUILTIN_EXPECT

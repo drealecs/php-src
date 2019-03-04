@@ -7,14 +7,13 @@ phpbuilddir = $(libdir)/build
 
 BUILD_FILES = \
 	scripts/phpize.m4 \
-	build/scan_makefile_in.awk \
 	build/libtool.m4 \
 	build/ltmain.sh \
 	build/ax_check_compile_flag.m4 \
 	build/ax_gcc_func_attribute.m4 \
 	build/php_cxx_compile_stdcxx.m4 \
 	build/pkg.m4 \
-	Makefile.global \
+	build/Makefile.global \
 	acinclude.m4 \
 	run-tests.php
 

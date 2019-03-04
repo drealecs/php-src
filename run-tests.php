@@ -53,7 +53,7 @@ function main()
 		   $repeat, $result_tests_file, $slow_min_ms, $start_time, $switch,
 		   $temp_source, $temp_target, $temp_urlbase, $test_cnt, $test_dirs,
 		   $test_files, $test_idx, $test_list, $test_results, $testfile,
-		   $user_tests, $valgrind, $sum_results;
+		   $user_tests, $valgrind, $sum_results, $shuffle;
 	// Parallel testing
 	global $workers, $workerID;
 
@@ -159,10 +159,6 @@ NO_PROC_OPEN_ERROR;
 	if ((substr(PHP_OS, 0, 3) == "WIN") && empty($environment["SystemRoot"])) {
 		$environment["SystemRoot"] = getenv("SystemRoot");
 	}
-
-	// Don't ever guess at the PHP executable location.
-	// Require the explicit specification.
-	// Otherwise we could end up testing the wrong file!
 
 	$php = null;
 	$php_cgi = null;
@@ -324,6 +320,7 @@ NO_PROC_OPEN_ERROR;
 	$no_clean = false;
 	$slow_min_ms = INF;
 	$preload = false;
+	$shuffle = false;
 	$workers = null;
 
 	$cfgtypes = array('show', 'keep');
@@ -461,11 +458,7 @@ NO_PROC_OPEN_ERROR;
 						$environment['TEST_PHP_EXECUTABLE'] = $php;
 						break;
 					case 'P':
-						if (constant('PHP_BINARY')) {
-							$php = PHP_BINARY;
-						} else {
-							break;
-						}
+						$php = PHP_BINARY;
 						putenv("TEST_PHP_EXECUTABLE=$php");
 						$environment['TEST_PHP_EXECUTABLE'] = $php;
 						break;
@@ -509,6 +502,9 @@ NO_PROC_OPEN_ERROR;
 						break;
 					case '--offline':
 						$environment['SKIP_ONLINE_TESTS'] = 1;
+						break;
+					case '--shuffle':
+						$shuffle = true;
 						break;
 					//case 'w'
 					case '-':
@@ -567,7 +563,7 @@ Options:
 
     -p <php>    Specify PHP executable to run.
 
-    -P          Use PHP_BINARY as PHP executable to run.
+    -P          Use PHP_BINARY as PHP executable to run (default).
 
     -q          Quiet, no user interaction (same as environment NO_INTERACTION).
 
@@ -650,6 +646,13 @@ HELP;
 					}
 				}
 			}
+		}
+
+		// Default to PHP_BINARY as executable
+		if (!isset($environment['TEST_PHP_EXECUTABLE'])) {
+			$php = PHP_BINARY;
+			putenv("TEST_PHP_EXECUTABLE=$php");
+			$environment['TEST_PHP_EXECUTABLE'] = $php;
 		}
 
 		if (strlen($conf_passed)) {
@@ -1334,7 +1337,7 @@ function run_all_tests($test_files, $env, $redir_tested = null)
 
 /** The heart of parallel testing. */
 function run_all_tests_parallel($test_files, $env, $redir_tested) {
-	global $workers, $test_idx, $test_cnt, $test_results, $failed_tests_file, $result_tests_file, $PHP_FAILED_TESTS;
+	global $workers, $test_idx, $test_cnt, $test_results, $failed_tests_file, $result_tests_file, $PHP_FAILED_TESTS, $shuffle;
 
 	// The PHP binary running run-tests.php, and run-tests.php itself
 	// This PHP executable is *not* necessarily the same as the tested version
@@ -1353,10 +1356,11 @@ function run_all_tests_parallel($test_files, $env, $redir_tested) {
 	// specified either in the --CONFLICTS-- section, or CONFLICTS file inside a directory.
 	$dirConflictsWith = [];
 	$fileConflictsWith = [];
-	foreach ($test_files as $file) {
+	$sequentialTests = [];
+	foreach ($test_files as $i => $file) {
 		$contents = file_get_contents($file);
 		if (preg_match('/^--CONFLICTS--(.+?)^--/ms', $contents, $matches)) {
-			$conflicts = array_map('trim', explode("\n", trim($matches[1])));
+			$conflicts = parse_conflicts($matches[1]);
 		} else {
 			// Cache per-directory conflicts in a separate map, so we compute these only once.
 			$dir = dirname($file);
@@ -1364,11 +1368,18 @@ function run_all_tests_parallel($test_files, $env, $redir_tested) {
 				$dirConflicts = [];
 				if (file_exists($dir . '/CONFLICTS')) {
 					$contents = file_get_contents($dir . '/CONFLICTS');
-					$dirConflicts = array_map('trim', explode("\n", trim($contents)));
+					$dirConflicts = parse_conflicts($contents);
 				}
 				$dirConflictsWith[$dir] = $dirConflicts;
 			}
 			$conflicts = $dirConflictsWith[$dir];
+		}
+
+		// For tests conflicting with "all", no other tests may run in parallel. We'll run these
+		// tests separately at the end, when only one worker is left.
+		if (in_array('all', $conflicts, true)) {
+			$sequentialTests[] = $file;
+			unset($test_files[$i]);
 		}
 
 		$fileConflictsWith[$file] = $conflicts;
@@ -1378,6 +1389,11 @@ function run_all_tests_parallel($test_files, $env, $redir_tested) {
 	// $test_files, so reverse its order here. This makes sure that order is preserved at least
 	// for tests with a common conflict key.
 	$test_files = array_reverse($test_files);
+
+	// To discover parallelization issues it is useful to randomize the test order.
+	if ($shuffle) {
+		shuffle($test_files);
+	}
 
 	echo "Spawning workers… ";
 
@@ -1472,7 +1488,7 @@ function run_all_tests_parallel($test_files, $env, $redir_tested) {
 	$waitingTests = [];
 
 escape:
-	while ($test_files || $testsInProgress > 0) {
+	while ($test_files || $sequentialTests || $testsInProgress > 0) {
 		$toRead = array_values($workerSocks);
 		$toWrite = NULL;
 		$toExcept = NULL;
@@ -1517,9 +1533,14 @@ escape:
 							}
 							// intentional fall-through
 						case "ready":
+							// Schedule sequential tests only once we are down to one worker.
+							if (count($workerProcs) === 1 && $sequentialTests) {
+								$test_files = array_merge($test_files, $sequentialTests);
+								$sequentialTests = [];
+							}
 							// Batch multiple tests to reduce communication overhead.
 							$files = [];
-							$batchSize = 32;
+							$batchSize = $shuffle ? 4 : 32;
 							while (count($files) <= $batchSize && $file = array_pop($test_files)) {
 								foreach ($fileConflictsWith[$file] as $conflictKey) {
 									if (isset($activeConflicts[$conflictKey])) {
@@ -1965,7 +1986,7 @@ TEST $file
 	$temp_clean = $temp_dir . DIRECTORY_SEPARATOR . $main_file_name . 'clean.php';
 	$test_clean = $test_dir . DIRECTORY_SEPARATOR . $main_file_name . 'clean.php';
 	$preload_filename = $temp_dir . DIRECTORY_SEPARATOR . $main_file_name . 'preload.php';
-	$tmp_post = $temp_dir . DIRECTORY_SEPARATOR . uniqid('/phpt.');
+	$tmp_post = $temp_dir . DIRECTORY_SEPARATOR . $main_file_name . 'post';
 	$tmp_relative_file = str_replace(__DIR__ . DIRECTORY_SEPARATOR, '', $test_file) . 't';
 
 	if ($temp_source && $temp_target) {
@@ -3180,6 +3201,12 @@ function clear_show_test() {
 		// Write over the last line to avoid random trailing chars on next echo
 		echo str_repeat(" ", $line_length), "\r";
 	}
+}
+
+function parse_conflicts(string $text) : array {
+	// Strip comments
+	$text = preg_replace('/#.*/', '', $text);
+	return array_map('trim', explode("\n", trim($text)));
 }
 
 function show_result($result, $tested, $tested_file, $extra = '', $temp_filenames = null)
