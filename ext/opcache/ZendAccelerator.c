@@ -3258,6 +3258,34 @@ try_again:
 	}
 }
 
+static void get_unresolved_initializer(zend_class_entry *ce, const char **kind, const char **name) {
+	zend_string *key;
+	zend_class_constant *c;
+	zend_property_info *prop;
+
+	*kind = "unknown";
+	*name = "";
+
+	ZEND_HASH_FOREACH_STR_KEY_PTR(&ce->constants_table, key, c) {
+		if (Z_TYPE(c->value) == IS_CONSTANT_AST) {
+			*kind = "constant ";
+			*name = ZSTR_VAL(key);
+		}
+	} ZEND_HASH_FOREACH_END();
+	ZEND_HASH_FOREACH_STR_KEY_PTR(&ce->properties_info, key, prop) {
+		zval *val;
+		if (prop->flags & ZEND_ACC_STATIC) {
+			val = &ce->default_static_members_table[prop->offset];
+		} else {
+			val = &ce->default_properties_table[OBJ_PROP_TO_NUM(prop->offset)];
+		}
+		if (Z_TYPE_P(val) == IS_CONSTANT_AST) {
+			*kind = (prop->flags & ZEND_ACC_STATIC) ? "static property $" : "property $";
+			*name = ZSTR_VAL(key);
+		}
+	} ZEND_HASH_FOREACH_END();
+}
+
 static void preload_link(void)
 {
 	zval *zv;
@@ -3386,23 +3414,16 @@ static void preload_link(void)
 					}
 				} ZEND_HASH_FOREACH_END();
 				if (ce->default_properties_count) {
-					zend_class_entry *pce = ce;
-
-					val = ce->default_properties_table + ce->default_properties_count - 1;
-					do {
-						uint32_t count = pce->parent ? pce->default_properties_count - pce->parent->default_properties_count : pce->default_properties_count;
-
-						while (count) {
-							if (Z_TYPE_P(val) == IS_CONSTANT_AST) {
-								if (UNEXPECTED(zval_update_constant_ex(val, pce) != SUCCESS)) {
-									ok = 0;
-								}
+					uint32_t i;
+					for (i = 0; i < ce->default_properties_count; i++) {
+						val = &ce->default_properties_table[i];
+						if (Z_TYPE_P(val) == IS_CONSTANT_AST) {
+							zend_property_info *prop = ce->properties_info_table[i];
+							if (UNEXPECTED(zval_update_constant_ex(val, prop->ce) != SUCCESS)) {
+								ok = 0;
 							}
-							val--;
-							count--;
 						}
-						pce = pce->parent;
-					} while (pce && pce-> default_properties_count);
+					}
 				}
 				if (ce->default_static_members_count) {
 					uint32_t count = ce->parent ? ce->default_static_members_count - ce->parent->default_static_members_count : ce->default_static_members_count;
@@ -3479,7 +3500,9 @@ static void preload_link(void)
 			}
 			zend_string_release(key);
 		} else if (!(ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED)) {
-			zend_error(E_WARNING, "Can't preload class %s with unresolved constants at %s:%d", ZSTR_VAL(ce->name), ZSTR_VAL(ce->info.user.filename), ce->info.user.line_start);
+			const char *kind, *name;
+			get_unresolved_initializer(ce, &kind, &name);
+			zend_error(E_WARNING, "Can't preload class %s with unresolved initializer for %s%s at %s:%d", ZSTR_VAL(ce->name), kind, name, ZSTR_VAL(ce->info.user.filename), ce->info.user.line_start);
 		} else if (!(ce->ce_flags & ZEND_ACC_PROPERTY_TYPES_RESOLVED)) {
 			zend_error(E_WARNING, "Can't preload class %s with unresolved property types at %s:%d", ZSTR_VAL(ce->name), ZSTR_VAL(ce->info.user.filename), ce->info.user.line_start);
 		} else {
@@ -3933,6 +3956,22 @@ static int accel_preload(const char *config)
 		if (EG(zend_constants)) {
 			zend_string *key;
 			zval *zv;
+
+			/* Remember __COMPILER_HALT_OFFSET__(s) */
+			ZEND_HASH_FOREACH_PTR(preload_scripts, script) {
+				zend_execute_data *orig_execute_data = EG(current_execute_data);
+				zend_execute_data fake_execute_data;
+				zval *offset;
+
+				memset(&fake_execute_data, 0, sizeof(fake_execute_data));
+				fake_execute_data.func = (zend_function*)&script->script.main_op_array;
+				EG(current_execute_data) = &fake_execute_data;
+				if ((offset = zend_get_constant_str("__COMPILER_HALT_OFFSET__", sizeof("__COMPILER_HALT_OFFSET__") - 1)) != NULL) {
+					script->compiler_halt_offset = Z_LVAL_P(offset);
+				}
+				EG(current_execute_data) = orig_execute_data;
+			} ZEND_HASH_FOREACH_END();
+
 			ZEND_HASH_REVERSE_FOREACH_STR_KEY_VAL(EG(zend_constants), key, zv) {
 				zend_constant *c = Z_PTR_P(zv);
 				if (ZEND_CONSTANT_FLAGS(c) & CONST_PERSISTENT) {
@@ -4129,6 +4168,7 @@ static int accel_finish_startup(void)
 		EG(error_reporting) = orig_error_reporting;
 
 		if (rc == SUCCESS) {
+			zend_bool orig_report_memleaks;
 
 			/* don't send headers */
 			SG(headers_sent) = 1;
@@ -4150,7 +4190,10 @@ static int accel_finish_startup(void)
 				ret = FAILURE;
 			}
 
+			orig_report_memleaks = PG(report_memleaks);
+			PG(report_memleaks) = 0;
 			php_request_shutdown(NULL);
+			PG(report_memleaks) = orig_report_memleaks;
 		} else {
 			ret = FAILURE;
 		}

@@ -61,7 +61,6 @@
 #define HAVE_PUTENV 1
 #define HAVE_LIMITS_H 1
 #define HAVE_TZSET 1
-#define HAVE_TZNAME 1
 #undef HAVE_FLOCK
 #define HAVE_ALLOCA 1
 #undef HAVE_SYS_TIME_H
@@ -69,13 +68,11 @@
 #undef HAVE_STRUCT_STAT_ST_BLKSIZE
 #undef HAVE_STRUCT_STAT_ST_BLOCKS
 #define HAVE_STRUCT_STAT_ST_RDEV 1
-#define STDC_HEADERS 1
 #define REGEX 1
 #define HSREGEX 1
 #define HAVE_GCVT 1
 #define HAVE_GETLOGIN 1
 #define HAVE_GETTIMEOFDAY 1
-#define HAVE_MEMCPY 1
 #define HAVE_MEMMOVE 1
 #define HAVE_PUTENV 1
 #define HAVE_REGCOMP 1
@@ -86,8 +83,6 @@
 # define HAVE_SETVBUF 1
 #endif
 #define HAVE_SHUTDOWN 1
-#define HAVE_SNPRINTF 1
-#define HAVE_VSNPRINTF 1
 #define HAVE_STRCASECMP 1
 #define HAVE_STRDUP 1
 #define HAVE_STRERROR 1

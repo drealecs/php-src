@@ -54,12 +54,6 @@ AH_BOTTOM([
 
 #include <string.h>
 
-#if ZEND_BROKEN_SPRINTF
-int zend_sprintf(char *buffer, const char *format, ...);
-#else
-# define zend_sprintf sprintf
-#endif
-
 #if defined(__cplusplus) && __cplusplus >= 201103L
 extern "C++" {
 #include <cmath>
@@ -182,7 +176,6 @@ PKG_PROG_PKG_CONFIG
 AC_PROG_CC([cc gcc])
 PHP_DETECT_ICC
 PHP_DETECT_SUNCC
-AC_PROG_CC_C_O
 dnl Change to AC_PROG_CC_STDC when we start requiring a post-2.13 autoconf
 dnl AC_PROG_CC_STDC
 AC_PROG_CPP
@@ -423,9 +416,6 @@ PHP_CHECK_FUNC(inet_aton, resolv, bind)
 dnl Then headers.
 dnl -------------------------------------------------------------------------
 
-dnl Checks for header files.
-AC_HEADER_STDC
-
 dnl QNX requires unix.h to allow functions in libunix to work properly
 AC_CHECK_HEADERS([ \
 inttypes.h \
@@ -511,8 +501,6 @@ AC_STRUCT_TIMEZONE
 
 PHP_MISSING_TIME_R_DECL
 PHP_MISSING_FCLOSE_DECL
-
-PHP_TM_GMTOFF
 PHP_STRUCT_FLOCK
 PHP_SOCKLEN_T
 
@@ -561,7 +549,8 @@ PHP_CHECK_CPU_SUPPORTS([sse4.2])
 PHP_CHECK_CPU_SUPPORTS([avx])
 PHP_CHECK_CPU_SUPPORTS([avx2])
 
-dnl Check for members of the stat structure
+dnl Check for structure members
+AC_CHECK_MEMBERS([struct tm.tm_gmtoff],,,[#include <time.h>])
 AC_CHECK_MEMBERS([struct stat.st_blksize, struct stat.st_rdev])
 dnl AC_STRUCT_ST_BLOCKS will screw QNX because fileblocks.o does not exist
 dnl The WARNING_LEVEL required because cc in QNX hates -w option without an argument
@@ -635,7 +624,6 @@ localtime_r \
 lockf \
 lchown \
 lrand48 \
-memcpy \
 memmove \
 mkstemp \
 mmap \
@@ -657,7 +645,6 @@ setsockopt \
 setvbuf \
 shutdown \
 sin \
-snprintf \
 srand48 \
 srandom \
 statfs \
@@ -679,7 +666,6 @@ unlockpt \
 unsetenv \
 usleep \
 utime \
-vsnprintf \
 vasprintf \
 asprintf \
 nanosleep \
@@ -743,9 +729,6 @@ fi
 
 AC_REPLACE_FUNCS(strlcat strlcpy explicit_bzero getopt)
 AC_FUNC_ALLOCA
-dnl PHP_AC_BROKEN_SPRINTF
-dnl PHP_AC_BROKEN_SNPRINTF
-PHP_DECLARED_TIMEZONE
 PHP_TIME_R_TYPE
 PHP_READDIR_R_TYPE
 PHP_CHECK_IN_ADDR_T
@@ -887,7 +870,7 @@ if test "$PHP_GCOV" = "yes"; then
   fi
 
   AC_DEFINE(HAVE_GCOV, 1, [Whether you have gcov])
-  PHP_ADD_MAKEFILE_FRAGMENT($abs_srcdir/Makefile.gcov, $abs_srcdir)
+  PHP_ADD_MAKEFILE_FRAGMENT($abs_srcdir/build/Makefile.gcov, $abs_srcdir)
 
   dnl Remove all optimization flags from CFLAGS
   changequote({,})
@@ -1495,7 +1478,7 @@ PHP_INSTALL_HEADERS([Zend/ TSRM/ include/ main/ main/streams/])
 
 PHP_ADD_SOURCES(TSRM, TSRM.c tsrm_strtok_r.c, -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1)
 
-PHP_ADD_SOURCES(main, main.c snprintf.c spprintf.c php_sprintf.c \
+PHP_ADD_SOURCES(main, main.c snprintf.c spprintf.c \
        fopen_wrappers.c alloca.c  php_scandir.c \
        php_ini.c SAPI.c rfc1867.c php_content_types.c strlcpy.c \
        strlcat.c explicit_bzero.c mergesort.c reentrancy.c php_variables.c php_ticks.c \
@@ -1518,7 +1501,7 @@ PHP_ADD_SOURCES(Zend, \
     zend_execute_API.c zend_highlight.c zend_llist.c \
     zend_vm_opcodes.c zend_opcode.c zend_operators.c zend_ptr_stack.c zend_stack.c \
     zend_variables.c zend.c zend_API.c zend_extensions.c zend_hash.c \
-    zend_list.c zend_builtin_functions.c zend_sprintf.c \
+    zend_list.c zend_builtin_functions.c \
     zend_ini.c zend_sort.c zend_multibyte.c zend_ts_hash.c zend_stream.c \
     zend_iterators.c zend_interfaces.c zend_exceptions.c zend_strtod.c zend_gc.c \
     zend_closures.c zend_float.c zend_string.c zend_signal.c zend_generators.c \
