@@ -233,13 +233,14 @@ typedef struct _zend_oparray_context {
 /* op_array or class is preloaded                         |     |     |     */
 #define ZEND_ACC_PRELOADED               (1 << 10) /*  X  |  X  |     |     */
 /*                                                        |     |     |     */
-/* Class Flags (unused: 28...)                            |     |     |     */
+/* Class Flags (unused: 29...)                            |     |     |     */
 /* ===========                                            |     |     |     */
 /*                                                        |     |     |     */
 /* Special class types                                    |     |     |     */
 #define ZEND_ACC_INTERFACE               (1 <<  0) /*  X  |     |     |     */
 #define ZEND_ACC_TRAIT                   (1 <<  1) /*  X  |     |     |     */
 #define ZEND_ACC_ANON_CLASS              (1 <<  2) /*  X  |     |     |     */
+#define ZEND_ACC_ENUM                    (1 << 28) /*  X  |     |     |     */
 /*                                                        |     |     |     */
 /* Class linked with parent, interfaces and traits        |     |     |     */
 #define ZEND_ACC_LINKED                  (1 <<  3) /*  X  |     |     |     */
@@ -387,7 +388,7 @@ typedef struct _zend_property_info {
 	((offset - OBJ_PROP_TO_OFFSET(0)) / sizeof(zval))
 
 typedef struct _zend_class_constant {
-	zval value; /* access flags are stored in reserved: zval.u2.access_flags */
+	zval value; /* access flags and other constant flags are stored in reserved: zval.u2.access_flags */
 	zend_string *doc_comment;
 	HashTable *attributes;
 	zend_class_entry *ce;
@@ -968,6 +969,9 @@ ZEND_API zend_string *zend_type_to_string(zend_type type);
 #define ZEND_THROW_IS_EXPR 1u
 
 #define ZEND_FCALL_MAY_HAVE_EXTRA_NAMED_PARAMS 1
+
+/* Must not conflict ZEND_ACC_ visibility flags or IS_CONSTANT_VISITED_MARK */
+#define ZEND_CLASS_CONST_IS_CASE	(1 << 6)
 
 /* The send mode and is_variadic flag are stored as part of zend_type */
 #define _ZEND_SEND_MODE_SHIFT _ZEND_TYPE_EXTRA_FLAGS_SHIFT

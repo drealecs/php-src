@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 34aa50c74f10106c6abd0ed2956d41c98aae6452 */
+ * Stub hash: 3609a828b79c1fe262fb6936830be85e5ba40d96 */
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_IteratorAggregate_getIterator, 0, 0, 0)
 ZEND_END_ARG_INFO()
@@ -51,6 +51,17 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_InternalIterator_valid, 0,
 ZEND_END_ARG_INFO()
 
 #define arginfo_class_InternalIterator_rewind arginfo_class_InternalIterator_next
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_UnitEnum_cases, 0, 0, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_ScalarEnum_from, 0, 1, IS_STATIC, 0)
+	ZEND_ARG_TYPE_MASK(0, value, MAY_BE_LONG|MAY_BE_STRING, NULL)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_ScalarEnum_tryFrom, 0, 1, IS_STATIC, 1)
+	ZEND_ARG_TYPE_MASK(0, value, MAY_BE_LONG|MAY_BE_STRING, NULL)
+ZEND_END_ARG_INFO()
 
 
 ZEND_METHOD(InternalIterator, __construct);
@@ -117,6 +128,19 @@ static const zend_function_entry class_InternalIterator_methods[] = {
 	ZEND_ME(InternalIterator, next, arginfo_class_InternalIterator_next, ZEND_ACC_PUBLIC)
 	ZEND_ME(InternalIterator, valid, arginfo_class_InternalIterator_valid, ZEND_ACC_PUBLIC)
 	ZEND_ME(InternalIterator, rewind, arginfo_class_InternalIterator_rewind, ZEND_ACC_PUBLIC)
+	ZEND_FE_END
+};
+
+
+static const zend_function_entry class_UnitEnum_methods[] = {
+	ZEND_ABSTRACT_ME_WITH_FLAGS(UnitEnum, cases, arginfo_class_UnitEnum_cases, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_ABSTRACT)
+	ZEND_FE_END
+};
+
+
+static const zend_function_entry class_ScalarEnum_methods[] = {
+	ZEND_ABSTRACT_ME_WITH_FLAGS(ScalarEnum, from, arginfo_class_ScalarEnum_from, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_ABSTRACT)
+	ZEND_ABSTRACT_ME_WITH_FLAGS(ScalarEnum, tryFrom, arginfo_class_ScalarEnum_tryFrom, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_ABSTRACT)
 	ZEND_FE_END
 };
 
@@ -200,6 +224,27 @@ static zend_class_entry *register_class_InternalIterator(zend_class_entry *class
 	class_entry = zend_register_internal_class_ex(&ce, NULL);
 	class_entry->ce_flags |= ZEND_ACC_FINAL;
 	zend_class_implements(class_entry, 1, class_entry_Iterator);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class_UnitEnum(void)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_CLASS_ENTRY(ce, "UnitEnum", class_UnitEnum_methods);
+	class_entry = zend_register_internal_interface(&ce);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class_ScalarEnum(zend_class_entry *class_entry_UnitEnum)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_CLASS_ENTRY(ce, "ScalarEnum", class_ScalarEnum_methods);
+	class_entry = zend_register_internal_interface(&ce);
+	zend_class_implements(class_entry, 1, class_entry_UnitEnum);
 
 	return class_entry;
 }
