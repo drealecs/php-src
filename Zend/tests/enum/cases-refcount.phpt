@@ -16,7 +16,7 @@ debug_zval_dump(Foo::Bar);
 
 ?>
 --EXPECT--
-object(Foo)#2 (1) refcount(2){
+object(Foo)#1 (1) refcount(2){
   ["name"]=>
-  string(3) "Bar" refcount(2)
+  string(3) "Bar" interned
 }

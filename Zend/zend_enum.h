@@ -22,6 +22,11 @@
 #include "zend.h"
 #include "zend_types.h"
 
+BEGIN_EXTERN_C()
+
+extern ZEND_API zend_class_entry *zend_ce_unit_enum;
+extern ZEND_API zend_class_entry *zend_ce_scalar_enum;
+
 void zend_register_enum_ce(void);
 void zend_enum_add_interfaces(zend_class_entry *ce);
 zend_object *zend_enum_new(zval *result, zend_class_entry *ce, zend_string *case_name, zval *scalar_zv);
@@ -30,5 +35,7 @@ void zend_enum_register_funcs(zend_class_entry *ce);
 void zend_enum_register_props(zend_class_entry *ce);
 zval *zend_enum_fetch_case_name(zend_object *zobj);
 zval *zend_enum_fetch_case_value(zend_object *zobj);
+
+END_EXTERN_C()
 
 #endif /* ZEND_ENUM_H */

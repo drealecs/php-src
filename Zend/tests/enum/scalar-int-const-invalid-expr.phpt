@@ -11,4 +11,4 @@ var_dump(Foo::Bar->value);
 
 ?>
 --EXPECTF--
-Fatal error: Unsupported constant expression in %s on line %d
+Fatal error: Enum case value must be constant in %s on line %d

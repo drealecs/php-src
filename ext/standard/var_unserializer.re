@@ -1368,14 +1368,14 @@ object ":" uiv ":" ["]	{
 	YYCURSOR += 2;
 	*p = YYCURSOR;
 
-	zval *zv = zend_hash_find(&ce->constants_table, case_name);
+	zval *zv = zend_hash_find(CE_CONSTANTS_TABLE(ce), case_name);
 	if (!zv) {
 		php_error_docref(NULL, E_WARNING, "Undefined constant %s::%s", ZSTR_VAL(enum_name), ZSTR_VAL(case_name));
 		goto fail;
 	}
 
 	zend_class_constant *c = Z_PTR_P(zv);
-	if (!(c->value.u2.access_flags & ZEND_CLASS_CONST_IS_CASE)) {
+	if (!(Z_ACCESS_FLAGS(c->value) & ZEND_CLASS_CONST_IS_CASE)) {
 		php_error_docref(NULL, E_WARNING, "%s::%s is not an enum case", ZSTR_VAL(enum_name), ZSTR_VAL(case_name));
 		goto fail;
 	}

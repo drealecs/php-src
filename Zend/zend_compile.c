@@ -7679,7 +7679,7 @@ static void zend_compile_enum_case(zend_ast *ast)
 		zend_error_noreturn(E_COMPILE_ERROR, "Case can only be used in enums");
 	}
 
-	zend_string *enum_case_name = zend_ast_get_str(ast->child[0]);
+	zend_string *enum_case_name = zval_make_interned_string(zend_ast_get_zval(ast->child[0]));
 	zend_string *enum_class_name = enum_class->name;
 
 	zval class_name_zval;
@@ -7704,11 +7704,14 @@ static void zend_compile_enum_case(zend_ast *ast)
 				ZSTR_VAL(enum_class_name));
 		}
 
-		if (!zend_is_allowed_in_const_expr(case_value_ast->kind)) {
+		zend_eval_const_expr(&ast->child[1]);
+		case_value_ast = ast->child[1];
+		if (case_value_ast->kind != ZEND_AST_ZVAL) {
 			zend_error_noreturn(E_COMPILE_ERROR, "Enum case value must be constant");
 		}
+
 		zval case_value_zv;
-		zend_ast_evaluate(&case_value_zv, case_value_ast, enum_class);
+		ZVAL_COPY(&case_value_zv, zend_ast_get_zval(case_value_ast));
 		if (enum_class->enum_scalar_type != Z_TYPE(case_value_zv)) {
 			zend_error_noreturn(E_COMPILE_ERROR, "Enum case type %s does not match enum scalar type %s", 
 				zend_get_type_by_const(Z_TYPE(case_value_zv)),
@@ -7716,6 +7719,7 @@ static void zend_compile_enum_case(zend_ast *ast)
 		}
 		case_value_zval_ast = zend_ast_create_zval(&case_value_zv);
 
+		Z_TRY_ADDREF(case_name_zval);
 		if (enum_class->enum_scalar_type == IS_LONG) {
 			zend_long long_key = Z_LVAL(case_value_zv);
 			zval *existing_case_name = zend_hash_index_find(enum_class->enum_scalar_table, long_key);
@@ -7745,7 +7749,7 @@ static void zend_compile_enum_case(zend_ast *ast)
 	zval value_zv;
 	zend_const_expr_to_zval(&value_zv, &const_enum_init_ast);
 	zend_class_constant *c = zend_declare_class_constant_ex(enum_class, enum_case_name, &value_zv, ZEND_ACC_PUBLIC, NULL);
-	c->value.u2.access_flags |= ZEND_CLASS_CONST_IS_CASE;
+	Z_ACCESS_FLAGS(c->value) |= ZEND_CLASS_CONST_IS_CASE;
 
 	zend_ast *attr_ast = ast->child[2];
 	if (attr_ast) {

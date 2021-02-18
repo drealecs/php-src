@@ -2485,45 +2485,55 @@ static zend_class_entry *zend_lazy_class_load(zend_class_entry *pce)
 		p = ce->function_table.arData;
 		end = p + ce->function_table.nNumUsed;
 		for (; p != end; p++) {
-			zend_op_array *op_array, *new_op_array;
-			void ***run_time_cache_ptr;
-			size_t alloc_size;
+			zend_function *func = Z_PTR(p->val);
+			ZEND_ASSERT(func->common.scope == pce);
+			ZEND_ASSERT(func->common.prototype == NULL);
+			if (func->type == ZEND_USER_FUNCTION) {
+				zend_op_array *op_array = &func->op_array, *new_op_array;
+				void ***run_time_cache_ptr;
+				size_t alloc_size;
 
-			op_array = Z_PTR(p->val);
-			ZEND_ASSERT(op_array->type == ZEND_USER_FUNCTION);
-			ZEND_ASSERT(op_array->scope == pce);
-			ZEND_ASSERT(op_array->prototype == NULL);
-			alloc_size = sizeof(zend_op_array) + sizeof(void *);
-			if (op_array->static_variables) {
-				alloc_size += sizeof(HashTable *);
-			}
-			new_op_array = zend_arena_alloc(&CG(arena), alloc_size);
-			Z_PTR(p->val) = new_op_array;
-			memcpy(new_op_array, op_array, sizeof(zend_op_array));
-			run_time_cache_ptr = (void***)(new_op_array + 1);
-			*run_time_cache_ptr = NULL;
-			new_op_array->fn_flags &= ~ZEND_ACC_IMMUTABLE;
-			new_op_array->scope = ce;
-			ZEND_MAP_PTR_INIT(new_op_array->run_time_cache, run_time_cache_ptr);
-			if (op_array->static_variables) {
-				HashTable **static_variables_ptr = (HashTable **) (run_time_cache_ptr + 1);
-				*static_variables_ptr = NULL;
-				ZEND_MAP_PTR_INIT(new_op_array->static_variables_ptr, static_variables_ptr);
-			}
+				op_array = Z_PTR(p->val);
+				alloc_size = sizeof(zend_op_array) + sizeof(void *);
+				if (op_array->static_variables) {
+					alloc_size += sizeof(HashTable *);
+				}
+				new_op_array = zend_arena_alloc(&CG(arena), alloc_size);
+				Z_PTR(p->val) = new_op_array;
+				memcpy(new_op_array, op_array, sizeof(zend_op_array));
+				run_time_cache_ptr = (void***)(new_op_array + 1);
+				*run_time_cache_ptr = NULL;
+				new_op_array->fn_flags &= ~ZEND_ACC_IMMUTABLE;
+				new_op_array->scope = ce;
+				ZEND_MAP_PTR_INIT(new_op_array->run_time_cache, run_time_cache_ptr);
+				if (op_array->static_variables) {
+					HashTable **static_variables_ptr = (HashTable **) (run_time_cache_ptr + 1);
+					*static_variables_ptr = NULL;
+					ZEND_MAP_PTR_INIT(new_op_array->static_variables_ptr, static_variables_ptr);
+				}
 
-			zend_update_inherited_handler(constructor);
-			zend_update_inherited_handler(destructor);
-			zend_update_inherited_handler(clone);
-			zend_update_inherited_handler(__get);
-			zend_update_inherited_handler(__set);
-			zend_update_inherited_handler(__call);
-			zend_update_inherited_handler(__isset);
-			zend_update_inherited_handler(__unset);
-			zend_update_inherited_handler(__tostring);
-			zend_update_inherited_handler(__callstatic);
-			zend_update_inherited_handler(__debugInfo);
-			zend_update_inherited_handler(__serialize);
-			zend_update_inherited_handler(__unserialize);
+				zend_update_inherited_handler(constructor);
+				zend_update_inherited_handler(destructor);
+				zend_update_inherited_handler(clone);
+				zend_update_inherited_handler(__get);
+				zend_update_inherited_handler(__set);
+				zend_update_inherited_handler(__call);
+				zend_update_inherited_handler(__isset);
+				zend_update_inherited_handler(__unset);
+				zend_update_inherited_handler(__tostring);
+				zend_update_inherited_handler(__callstatic);
+				zend_update_inherited_handler(__debugInfo);
+				zend_update_inherited_handler(__serialize);
+				zend_update_inherited_handler(__unserialize);
+			} else {
+				/* We should encounter internal methods only in enums. */
+				ZEND_ASSERT(ce->ce_flags & ZEND_ACC_ENUM);
+				zend_internal_function *new_func =
+					zend_arena_alloc(&CG(arena), sizeof(zend_internal_function));
+				Z_PTR(p->val) = new_func;
+				memcpy(new_func, func, sizeof(zend_internal_function));
+				new_func->scope = ce;
+			}
 		}
 	}
 
