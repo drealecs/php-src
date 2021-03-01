@@ -605,7 +605,7 @@ again:
 			if (myht) {
 				zend_release_properties(myht);
 			}
-			if (level > 1) {
+			if (level > 1 && !is_enum) {
 				buffer_append_spaces(buf, level - 1);
 			}
 			if (ce == zend_standard_class_def) {
