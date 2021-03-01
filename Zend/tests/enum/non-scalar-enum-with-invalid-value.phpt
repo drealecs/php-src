@@ -1,10 +1,10 @@
 --TEST--
-Non-scalar enum errors when case has value
+Non-scalar enum errors when case has invalid value
 --FILE--
 <?php
 
 enum Foo {
-    case Bar = 1;
+    case Bar = 3.141;
 }
 
 ?>

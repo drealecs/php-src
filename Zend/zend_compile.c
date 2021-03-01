@@ -7699,9 +7699,18 @@ static void zend_compile_enum_case(zend_ast *ast)
 	}
 	if (case_value_ast != NULL) {
 		if (enum_class->enum_scalar_type == IS_UNDEF) {
-			zend_error_noreturn(E_COMPILE_ERROR, "Case %s of non-scalar enum %s must not have a value",
-				ZSTR_VAL(enum_case_name),
-				ZSTR_VAL(enum_class_name));
+			zval case_value_zv;
+			ZVAL_COPY(&case_value_zv, zend_ast_get_zval(case_value_ast));
+			if (Z_TYPE(case_value_zv) == IS_LONG || Z_TYPE(case_value_zv) == IS_STRING) {
+				zend_error_noreturn(E_COMPILE_ERROR, "Case %s of non-scalar enum %s must not have a value, try adding \": %s\" to the enum declaration",
+					ZSTR_VAL(enum_case_name),
+					ZSTR_VAL(enum_class_name),
+					zend_zval_type_name(&case_value_zv));
+			} else {
+				zend_error_noreturn(E_COMPILE_ERROR, "Case %s of non-scalar enum %s must not have a value",
+					ZSTR_VAL(enum_case_name),
+					ZSTR_VAL(enum_class_name));
+			}
 		}
 
 		zend_eval_const_expr(&ast->child[1]);
