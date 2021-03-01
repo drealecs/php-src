@@ -33,8 +33,19 @@ zend_object *zend_enum_new(zval *result, zend_class_entry *ce, zend_string *case
 void zend_verify_enum(zend_class_entry *ce);
 void zend_enum_register_funcs(zend_class_entry *ce);
 void zend_enum_register_props(zend_class_entry *ce);
-zval *zend_enum_fetch_case_name(zend_object *zobj);
-zval *zend_enum_fetch_case_value(zend_object *zobj);
+
+static zend_always_inline zval *zend_enum_fetch_case_name(zend_object *zobj)
+{
+	ZEND_ASSERT(zobj->ce->ce_flags & ZEND_ACC_ENUM);
+	return OBJ_PROP_NUM(zobj, 0);
+}
+
+static zend_always_inline zval *zend_enum_fetch_case_value(zend_object *zobj)
+{
+	ZEND_ASSERT(zobj->ce->ce_flags & ZEND_ACC_ENUM);
+	ZEND_ASSERT(zobj->ce->enum_scalar_type != IS_UNDEF);
+	return OBJ_PROP_NUM(zobj, 1);
+}
 
 END_EXTERN_C()
 
