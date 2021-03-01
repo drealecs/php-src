@@ -711,4 +711,7 @@ final class ReflectionEnumUnitCase extends ReflectionClassConstant
     public function getScalar(): int|string|null {}
 
     public function getEnum(): ReflectionEnum {}
+
+    /** @implementation-alias ReflectionClassConstant::getValue */
+    public function getValue(): UnitEnum {}
 }
