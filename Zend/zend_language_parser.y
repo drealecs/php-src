@@ -269,7 +269,7 @@ static YYSIZE_T zend_yytnamerr(char*, const char*);
 %type <ast> attributed_statement attributed_class_statement attributed_parameter
 %type <ast> attribute_decl attribute attributes attribute_group namespace_declaration_name
 %type <ast> match match_arm_list non_empty_match_arm_list match_arm match_arm_cond_list
-%type <ast> enum_declaration_statement enum_scalar_type enum_case enum_case_expr
+%type <ast> enum_declaration_statement enum_backing_type enum_case enum_case_expr
 
 %type <num> returns_ref function fn is_reference is_variadic variable_modifiers
 %type <num> method_modifiers non_empty_member_modifiers member_modifier optional_visibility_modifier
@@ -597,11 +597,11 @@ interface_declaration_statement:
 
 enum_declaration_statement:
 		T_ENUM { $<num>$ = CG(zend_lineno); }
-		T_STRING enum_scalar_type implements_list backup_doc_comment '{' class_statement_list '}'
+		T_STRING enum_backing_type implements_list backup_doc_comment '{' class_statement_list '}'
 			{ $$ = zend_ast_create_decl(ZEND_AST_CLASS, ZEND_ACC_ENUM|ZEND_ACC_FINAL, $<num>2, $6, zend_ast_get_str($3), NULL, $5, $8, NULL, $4); }
 ;
 
-enum_scalar_type:
+enum_backing_type:
 		%empty	{ $$ = NULL; }
 	|	':' type_expr { $$ = $2; }
 ;

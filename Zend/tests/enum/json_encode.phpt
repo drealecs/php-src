@@ -43,8 +43,8 @@ test(CustomFoo::Bar);
 ?>
 --EXPECT--
 bool(false)
-Non-scalar enums have no default serialization
-JsonException: Non-scalar enums have no default serialization
+Non-backed enums have no default serialization
+JsonException: Non-backed enums have no default serialization
 string(1) "0"
 No error
 string(1) "0"

@@ -521,11 +521,11 @@ void zend_persist_class_entry_calc(zend_class_entry *ce)
 			}
 		}
 
-		if (ce->enum_scalar_table) {
+		if (ce->backed_enum_table) {
 			Bucket *p;
 			ADD_SIZE(sizeof(HashTable));
-			zend_hash_persist_calc(ce->enum_scalar_table);
-			ZEND_HASH_FOREACH_BUCKET(ce->enum_scalar_table, p) {
+			zend_hash_persist_calc(ce->backed_enum_table);
+			ZEND_HASH_FOREACH_BUCKET(ce->backed_enum_table, p) {
 				if (p->key != NULL) {
 					ADD_INTERNED_STRING(p->key);
 				}

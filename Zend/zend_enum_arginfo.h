@@ -1,14 +1,14 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: e07c749f2a50338f356901326ff94bdb54eadb89 */
+ * Stub hash: 7092f1d4ba651f077cff37050899f090f00abf22 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_UnitEnum_cases, 0, 0, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_ScalarEnum_from, 0, 1, IS_STATIC, 0)
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_BackedEnum_from, 0, 1, IS_STATIC, 0)
 	ZEND_ARG_TYPE_MASK(0, value, MAY_BE_LONG|MAY_BE_STRING, NULL)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_ScalarEnum_tryFrom, 0, 1, IS_STATIC, 1)
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_BackedEnum_tryFrom, 0, 1, IS_STATIC, 1)
 	ZEND_ARG_TYPE_MASK(0, value, MAY_BE_LONG|MAY_BE_STRING, NULL)
 ZEND_END_ARG_INFO()
 
@@ -21,9 +21,9 @@ static const zend_function_entry class_UnitEnum_methods[] = {
 };
 
 
-static const zend_function_entry class_ScalarEnum_methods[] = {
-	ZEND_ABSTRACT_ME_WITH_FLAGS(ScalarEnum, from, arginfo_class_ScalarEnum_from, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_ABSTRACT)
-	ZEND_ABSTRACT_ME_WITH_FLAGS(ScalarEnum, tryFrom, arginfo_class_ScalarEnum_tryFrom, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_ABSTRACT)
+static const zend_function_entry class_BackedEnum_methods[] = {
+	ZEND_ABSTRACT_ME_WITH_FLAGS(BackedEnum, from, arginfo_class_BackedEnum_from, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_ABSTRACT)
+	ZEND_ABSTRACT_ME_WITH_FLAGS(BackedEnum, tryFrom, arginfo_class_BackedEnum_tryFrom, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC|ZEND_ACC_ABSTRACT)
 	ZEND_FE_END
 };
 
@@ -37,11 +37,11 @@ static zend_class_entry *register_class_UnitEnum(void)
 	return class_entry;
 }
 
-static zend_class_entry *register_class_ScalarEnum(zend_class_entry *class_entry_UnitEnum)
+static zend_class_entry *register_class_BackedEnum(zend_class_entry *class_entry_UnitEnum)
 {
 	zend_class_entry ce, *class_entry;
 
-	INIT_CLASS_ENTRY(ce, "ScalarEnum", class_ScalarEnum_methods);
+	INIT_CLASS_ENTRY(ce, "BackedEnum", class_BackedEnum_methods);
 	class_entry = zend_register_internal_interface(&ce);
 	zend_class_implements(class_entry, 1, class_entry_UnitEnum);
 

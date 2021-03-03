@@ -1,5 +1,5 @@
 --TEST--
-Scalar enums from() unknown hash
+BackedEnum::from() unknown hash
 --FILE--
 <?php
 

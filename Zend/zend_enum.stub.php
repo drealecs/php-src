@@ -7,7 +7,7 @@ interface UnitEnum
     public static function cases(): array;
 }
 
-interface ScalarEnum extends UnitEnum
+interface BackedEnum extends UnitEnum
 {
     public static function from(int|string $value): static;
 

@@ -699,16 +699,16 @@ final class ReflectionEnum extends ReflectionClass
     /** @return ReflectionEnumUnitCase[] */
     public function getCases(): array {}
 
-    public function hasScalarType(): bool {}
+    public function isBacked(): bool {}
 
-    public function getScalarType(): ReflectionType|null {}
+    public function getBackingType(): ReflectionType|null {}
 }
 
 final class ReflectionEnumUnitCase extends ReflectionClassConstant
 {
     public function __construct(object|string $class, string $constant) {}
 
-    public function getScalar(): int|string|null {}
+    public function getBackingValue(): int|string|null {}
 
     public function getEnum(): ReflectionEnum {}
 

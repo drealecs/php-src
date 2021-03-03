@@ -1890,8 +1890,8 @@ ZEND_API void zend_initialize_class_data(zend_class_entry *ce, bool nullify_hand
 	ce->default_static_members_count = 0;
 	ce->properties_info_table = NULL;
 	ce->attributes = NULL;
-	ce->enum_scalar_type = IS_UNDEF;
-	ce->enum_scalar_table = NULL;
+	ce->enum_backing_type = IS_UNDEF;
+	ce->backed_enum_table = NULL;
 
 	if (nullify_handlers) {
 		ce->constructor = NULL;
@@ -7445,10 +7445,10 @@ static zend_string *zend_generate_anon_class_name(zend_ast_decl *decl)
 	return zend_new_interned_string(result);
 }
 
-static void zend_compile_enum_scalar_type(zend_class_entry *ce, zend_ast *enum_scalar_type_ast)
+static void zend_compile_enum_backing_type(zend_class_entry *ce, zend_ast *enum_backing_type_ast)
 {
 	ZEND_ASSERT(ce->ce_flags & ZEND_ACC_ENUM);
-	zend_type type = zend_compile_typename(enum_scalar_type_ast, 0);
+	zend_type type = zend_compile_typename(enum_backing_type_ast, 0);
 	uint32_t type_mask = ZEND_TYPE_PURE_MASK(type);
 	if (
 		ZEND_TYPE_HAS_CLASS(type)
@@ -7459,19 +7459,19 @@ static void zend_compile_enum_scalar_type(zend_class_entry *ce, zend_ast *enum_s
 	) {
 		zend_string *type_string = zend_type_to_string(type);
 		zend_error_noreturn(E_COMPILE_ERROR,
-			"Enum scalar type must be int or string, %s given",
+			"Enum backing type must be int or string, %s given",
 			ZSTR_VAL(type_string));
 	}
 	if (type_mask == MAY_BE_LONG) {
-		ce->enum_scalar_type = IS_LONG;
+		ce->enum_backing_type = IS_LONG;
 	} else {
 		ZEND_ASSERT(type_mask == MAY_BE_STRING);
-		ce->enum_scalar_type = IS_STRING;
+		ce->enum_backing_type = IS_STRING;
 	}
 	zend_type_release(type, 0);
 
-	ce->enum_scalar_table = emalloc(sizeof(HashTable));
-	zend_hash_init(ce->enum_scalar_table, 0, NULL, ZVAL_PTR_DTOR, 0);
+	ce->backed_enum_table = emalloc(sizeof(HashTable));
+	zend_hash_init(ce->backed_enum_table, 0, NULL, ZVAL_PTR_DTOR, 0);
 }
 
 zend_class_entry *zend_compile_class_decl(znode *result, zend_ast *ast, bool toplevel) /* {{{ */
@@ -7480,7 +7480,7 @@ zend_class_entry *zend_compile_class_decl(znode *result, zend_ast *ast, bool top
 	zend_ast *extends_ast = decl->child[0];
 	zend_ast *implements_ast = decl->child[1];
 	zend_ast *stmt_ast = decl->child[2];
-	zend_ast *enum_scalar_type_ast = decl->child[4];
+	zend_ast *enum_backing_type_ast = decl->child[4];
 	zend_string *name, *lcname;
 	zend_class_entry *ce = zend_arena_alloc(&CG(arena), sizeof(zend_class_entry));
 	zend_op *opline;
@@ -7562,8 +7562,8 @@ zend_class_entry *zend_compile_class_decl(znode *result, zend_ast *ast, bool top
 	}
 
 	if (ce->ce_flags & ZEND_ACC_ENUM) {
-		if (enum_scalar_type_ast != NULL) {
-			zend_compile_enum_scalar_type(ce, enum_scalar_type_ast);
+		if (enum_backing_type_ast != NULL) {
+			zend_compile_enum_backing_type(ce, enum_backing_type_ast);
 		}
 		zend_enum_add_interfaces(ce);
 		zend_enum_register_funcs(ce);
@@ -7692,22 +7692,22 @@ static void zend_compile_enum_case(zend_ast *ast)
 
 	zend_ast *case_value_zval_ast = NULL;
 	zend_ast *case_value_ast = ast->child[1];
-	if (enum_class->enum_scalar_type != IS_UNDEF && case_value_ast == NULL) {
-		zend_error_noreturn(E_COMPILE_ERROR, "Case %s of scalar enum %s must have a value",
+	if (enum_class->enum_backing_type != IS_UNDEF && case_value_ast == NULL) {
+		zend_error_noreturn(E_COMPILE_ERROR, "Case %s of backed enum %s must have a value",
 			ZSTR_VAL(enum_case_name),
 			ZSTR_VAL(enum_class_name));
 	}
 	if (case_value_ast != NULL) {
-		if (enum_class->enum_scalar_type == IS_UNDEF) {
+		if (enum_class->enum_backing_type == IS_UNDEF) {
 			zval case_value_zv;
 			ZVAL_COPY(&case_value_zv, zend_ast_get_zval(case_value_ast));
 			if (Z_TYPE(case_value_zv) == IS_LONG || Z_TYPE(case_value_zv) == IS_STRING) {
-				zend_error_noreturn(E_COMPILE_ERROR, "Case %s of non-scalar enum %s must not have a value, try adding \": %s\" to the enum declaration",
+				zend_error_noreturn(E_COMPILE_ERROR, "Case %s of non-backed enum %s must not have a value, try adding \": %s\" to the enum declaration",
 					ZSTR_VAL(enum_case_name),
 					ZSTR_VAL(enum_class_name),
 					zend_zval_type_name(&case_value_zv));
 			} else {
-				zend_error_noreturn(E_COMPILE_ERROR, "Case %s of non-scalar enum %s must not have a value",
+				zend_error_noreturn(E_COMPILE_ERROR, "Case %s of non-backed enum %s must not have a value",
 					ZSTR_VAL(enum_case_name),
 					ZSTR_VAL(enum_class_name));
 			}
@@ -7721,35 +7721,35 @@ static void zend_compile_enum_case(zend_ast *ast)
 
 		zval case_value_zv;
 		ZVAL_COPY(&case_value_zv, zend_ast_get_zval(case_value_ast));
-		if (enum_class->enum_scalar_type != Z_TYPE(case_value_zv)) {
-			zend_error_noreturn(E_COMPILE_ERROR, "Enum case type %s does not match enum scalar type %s", 
+		if (enum_class->enum_backing_type != Z_TYPE(case_value_zv)) {
+			zend_error_noreturn(E_COMPILE_ERROR, "Enum case type %s does not match enum backing type %s", 
 				zend_get_type_by_const(Z_TYPE(case_value_zv)),
-				zend_get_type_by_const(enum_class->enum_scalar_type));
+				zend_get_type_by_const(enum_class->enum_backing_type));
 		}
 		case_value_zval_ast = zend_ast_create_zval(&case_value_zv);
 
 		Z_TRY_ADDREF(case_name_zval);
-		if (enum_class->enum_scalar_type == IS_LONG) {
+		if (enum_class->enum_backing_type == IS_LONG) {
 			zend_long long_key = Z_LVAL(case_value_zv);
-			zval *existing_case_name = zend_hash_index_find(enum_class->enum_scalar_table, long_key);
+			zval *existing_case_name = zend_hash_index_find(enum_class->backed_enum_table, long_key);
 			if (existing_case_name) {
 				zend_error_noreturn(E_COMPILE_ERROR, "Duplicate value in enum %s for cases %s and %s",
 					ZSTR_VAL(enum_class_name),
 					Z_STRVAL_P(existing_case_name),
 					ZSTR_VAL(enum_case_name));
 			}
-			zend_hash_index_add(enum_class->enum_scalar_table, long_key, &case_name_zval);
+			zend_hash_index_add(enum_class->backed_enum_table, long_key, &case_name_zval);
 		} else {
-			ZEND_ASSERT(enum_class->enum_scalar_type == IS_STRING);
+			ZEND_ASSERT(enum_class->enum_backing_type == IS_STRING);
 			zend_string *string_key = Z_STR(case_value_zv);
-			zval *existing_case_name = zend_hash_find_ex(enum_class->enum_scalar_table, string_key, 1);
+			zval *existing_case_name = zend_hash_find_ex(enum_class->backed_enum_table, string_key, 1);
 			if (existing_case_name != NULL) {
 				zend_error_noreturn(E_COMPILE_ERROR, "Duplicate value in enum %s for cases %s and %s",
 					ZSTR_VAL(enum_class_name),
 					Z_STRVAL_P(existing_case_name),
 					ZSTR_VAL(enum_case_name));
 			}
-			zend_hash_add(enum_class->enum_scalar_table, string_key, &case_name_zval);
+			zend_hash_add(enum_class->backed_enum_table, string_key, &case_name_zval);
 		}
 	}
 

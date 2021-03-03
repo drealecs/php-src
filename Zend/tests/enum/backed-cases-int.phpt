@@ -1,13 +1,13 @@
 --TEST--
-String scalar enums can list cases
+Int backed enums with can list cases
 --FILE--
 <?php
 
-enum Suit: string {
-    case Hearts = 'H';
-    case Diamonds = 'D';
-    case Clubs = 'C';
-    case Spades = 'S';
+enum Suit: int {
+    case Hearts = 2;
+    case Diamonds = 1;
+    case Clubs = 4;
+    case Spades = 3;
 }
 
 var_dump(Suit::cases());

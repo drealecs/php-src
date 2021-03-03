@@ -1,5 +1,5 @@
 --TEST--
-Auto implement ScalarEnum interface
+Auto implement BackedEnum interface
 --FILE--
 <?php
 
@@ -11,8 +11,8 @@ enum Baz: int {
     case Qux = 0;
 }
 
-var_dump(Foo::Bar instanceof ScalarEnum);
-var_dump(Baz::Qux instanceof ScalarEnum);
+var_dump(Foo::Bar instanceof BackedEnum);
+var_dump(Baz::Qux instanceof BackedEnum);
 
 ?>
 --EXPECT--

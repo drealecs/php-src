@@ -1,5 +1,5 @@
 --TEST--
-Scalar Enum::from() reject invalid string
+BackedEnum::from() reject invalid string
 --FILE--
 <?php
 
@@ -18,4 +18,4 @@ try {
 
 ?>
 --EXPECT--
-"A" is not a valid scalar value for enum "Suit"
+"A" is not a valid backing value for enum "Suit"

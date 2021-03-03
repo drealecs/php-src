@@ -1,5 +1,5 @@
 --TEST--
-Scalar enum with negative int
+Backed enum with negative int
 --FILE--
 <?php
 

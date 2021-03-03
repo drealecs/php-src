@@ -466,9 +466,9 @@ static void zend_print_zval_r_to_buf(smart_str *buf, zval *expr, int indent) /* 
 					smart_str_appends(buf, " Object\n");
 				} else {
 					smart_str_appends(buf, " Enum");
-					if (zobj->ce->enum_scalar_type != IS_UNDEF) {
+					if (zobj->ce->enum_backing_type != IS_UNDEF) {
 						smart_str_appendc(buf, ':');
-						smart_str_appends(buf, zend_get_type_by_const(zobj->ce->enum_scalar_type));
+						smart_str_appends(buf, zend_get_type_by_const(zobj->ce->enum_backing_type));
 					}
 					smart_str_appendc(buf, '\n');
 				}

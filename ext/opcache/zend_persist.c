@@ -329,20 +329,20 @@ uint32_t zend_accel_get_type_map_ptr(zend_string *type_name, zend_class_entry *s
 	return ret;
 }
 
-static HashTable *zend_persist_enum_scalar_table(HashTable *enum_scalar_table)
+static HashTable *zend_persist_backed_enum_table(HashTable *backed_enum_table)
 {
 	HashTable *ptr;
 	Bucket *p;
-	zend_hash_persist(enum_scalar_table);
+	zend_hash_persist(backed_enum_table);
 
-	ZEND_HASH_FOREACH_BUCKET(enum_scalar_table, p) {
+	ZEND_HASH_FOREACH_BUCKET(backed_enum_table, p) {
 		if (p->key != NULL) {
 			zend_accel_store_interned_string(p->key);
 		}
 		zend_persist_zval(&p->val);
 	} ZEND_HASH_FOREACH_END();
 
-	ptr = zend_shared_memdup_free(enum_scalar_table, sizeof(HashTable));
+	ptr = zend_shared_memdup_free(backed_enum_table, sizeof(HashTable));
 	GC_SET_REFCOUNT(ptr, 2);
 	GC_TYPE_INFO(ptr) = GC_ARRAY | ((IS_ARRAY_IMMUTABLE|GC_NOT_COLLECTABLE) << GC_FLAGS_SHIFT);
 
@@ -1055,8 +1055,8 @@ zend_class_entry *zend_persist_class_entry(zend_class_entry *orig_ce)
 			}
 		}
 
-		if (ce->enum_scalar_table) {
-			ce->enum_scalar_table = zend_persist_enum_scalar_table(ce->enum_scalar_table);
+		if (ce->backed_enum_table) {
+			ce->backed_enum_table = zend_persist_backed_enum_table(ce->backed_enum_table);
 		}
 	}
 

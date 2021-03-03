@@ -1,5 +1,5 @@
 --TEST--
-Scalar Enum::from() reject invalid int
+BackedEnum::from() reject invalid int
 --FILE--
 <?php
 
@@ -16,4 +16,4 @@ try {
 
 ?>
 --EXPECT--
-2 is not a valid scalar value for enum "Foo"
+2 is not a valid backing value for enum "Foo"

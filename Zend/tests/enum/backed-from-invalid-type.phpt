@@ -1,5 +1,5 @@
 --TEST--
-Scalar Enum::from() reject invalid type
+BackedEnum::from() reject invalid type
 --FILE--
 <?php
 
@@ -30,5 +30,5 @@ try {
 
 ?>
 --EXPECT--
-"42" is not a valid scalar value for enum "Suit"
+"42" is not a valid backing value for enum "Suit"
 Foo::from(): Argument #1 ($value) must be of type int, string given

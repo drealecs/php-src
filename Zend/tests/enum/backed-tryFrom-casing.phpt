@@ -1,5 +1,5 @@
 --TEST--
-Scalar enums tryFrom() casing in reflection
+BackedEnum::tryFrom() casing in reflection
 --FILE--
 <?php
 

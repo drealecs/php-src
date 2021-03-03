@@ -1,5 +1,5 @@
 --TEST--
-Scalar enums can be upcast from a scalar
+BackedEnum::tryFrom()
 --FILE--
 <?php
 
@@ -10,10 +10,11 @@ enum Suit: string {
     case Spades = 'S';
 }
 
-var_dump(Suit::from('H'));
-var_dump(Suit::from('D'));
-var_dump(Suit::from('C'));
-var_dump(Suit::from('S'));
+var_dump(Suit::tryFrom('H'));
+var_dump(Suit::tryFrom('D'));
+var_dump(Suit::tryFrom('C'));
+var_dump(Suit::tryFrom('S'));
+var_dump(Suit::tryFrom('X'));
 
 enum Foo: int {
     case Bar = 1;
@@ -21,9 +22,10 @@ enum Foo: int {
     case Beep = 3;
 }
 
-var_dump(Foo::from(1));
-var_dump(Foo::from(2));
-var_dump(Foo::from(3));
+var_dump(Foo::tryFrom(1));
+var_dump(Foo::tryFrom(2));
+var_dump(Foo::tryFrom(3));
+var_dump(Foo::tryFrom(4));
 
 ?>
 --EXPECT--
@@ -31,6 +33,8 @@ enum(Suit::Hearts)
 enum(Suit::Diamonds)
 enum(Suit::Clubs)
 enum(Suit::Spades)
+NULL
 enum(Foo::Bar)
 enum(Foo::Baz)
 enum(Foo::Beep)
+NULL

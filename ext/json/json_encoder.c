@@ -513,8 +513,8 @@ static int php_json_encode_serializable_object(smart_str *buf, zval *val, int op
 static int php_json_encode_serializable_enum(smart_str *buf, zval *val, int options, php_json_encoder *encoder)
 {
 	zend_class_entry *ce = Z_OBJCE_P(val);
-	if (ce->enum_scalar_type == IS_UNDEF) {
-		encoder->error_code = PHP_JSON_ERROR_NON_SCALAR_ENUM;
+	if (ce->enum_backing_type == IS_UNDEF) {
+		encoder->error_code = PHP_JSON_ERROR_NON_BACKED_ENUM;
 		smart_str_appendc(buf, '0');
 		return FAILURE;
 	}

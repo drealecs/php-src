@@ -89,7 +89,7 @@ PHPAPI zend_class_entry *reflection_zend_extension_ptr;
 PHPAPI zend_class_entry *reflection_reference_ptr;
 PHPAPI zend_class_entry *reflection_attribute_ptr;
 PHPAPI zend_class_entry *reflection_enum_ptr;
-PHPAPI zend_class_entry *reflection_enum_case_ptr;
+PHPAPI zend_class_entry *reflection_enum_unit_case_ptr;
 
 /* Exception throwing macro */
 #define _DO_THROW(msg) \
@@ -1452,7 +1452,7 @@ static void reflection_enum_case_factory(zend_string *name_str, zend_class_const
 {
 	reflection_object *intern;
 
-	reflection_instantiate(reflection_enum_case_ptr, object);
+	reflection_instantiate(reflection_enum_unit_case_ptr, object);
 	intern = Z_REFLECTION_P(object);
 	intern->ptr = constant;
 	intern->ref_type = REF_TYPE_CLASS_CONSTANT;
@@ -6621,7 +6621,7 @@ ZEND_METHOD(ReflectionEnum, getCases)
 	} ZEND_HASH_FOREACH_END();
 }
 
-ZEND_METHOD(ReflectionEnum, hasScalarType)
+ZEND_METHOD(ReflectionEnum, isBacked)
 {
 	reflection_object *intern;
 	zend_class_entry *ce;
@@ -6631,10 +6631,10 @@ ZEND_METHOD(ReflectionEnum, hasScalarType)
 	}
 
 	GET_REFLECTION_OBJECT_PTR(ce);
-	RETURN_BOOL(ce->enum_scalar_type != IS_UNDEF);
+	RETURN_BOOL(ce->enum_backing_type != IS_UNDEF);
 }
 
-ZEND_METHOD(ReflectionEnum, getScalarType)
+ZEND_METHOD(ReflectionEnum, getBackingType)
 {
 	reflection_object *intern;
 	zend_class_entry *ce;
@@ -6645,10 +6645,10 @@ ZEND_METHOD(ReflectionEnum, getScalarType)
 
 	GET_REFLECTION_OBJECT_PTR(ce);
 
-	if (ce->enum_scalar_type == IS_UNDEF) {
+	if (ce->enum_backing_type == IS_UNDEF) {
 		RETURN_NULL();
 	} else {
-		zend_type type = ZEND_TYPE_INIT_CODE(ce->enum_scalar_type, 0, 0);
+		zend_type type = ZEND_TYPE_INIT_CODE(ce->enum_backing_type, 0, 0);
 		reflection_type_factory(type, return_value, 0);
 	}
 }
@@ -6671,7 +6671,7 @@ ZEND_METHOD(ReflectionEnumUnitCase, __construct)
 	}
 }
 
-ZEND_METHOD(ReflectionEnumUnitCase, getScalar)
+ZEND_METHOD(ReflectionEnumUnitCase, getBackingValue)
 {
 	reflection_object *intern;
 	zend_class_constant *ref;
@@ -6685,7 +6685,7 @@ ZEND_METHOD(ReflectionEnumUnitCase, getScalar)
 		zval_update_constant_ex(&ref->value, ref->ce);
 	}
 
-	if (intern->ce->enum_scalar_type == IS_UNDEF) {
+	if (intern->ce->enum_backing_type == IS_UNDEF) {
 		RETURN_NULL();
 	}
 
@@ -6819,9 +6819,9 @@ PHP_MINIT_FUNCTION(reflection) /* {{{ */
 	reflection_init_class_handlers(reflection_enum_ptr);
 	REGISTER_REFLECTION_CLASS_CONST_LONG(enum, "IS_FINAL", ZEND_ACC_FINAL);
 
-	reflection_enum_case_ptr = register_class_ReflectionEnumUnitCase(reflection_class_constant_ptr);
-	reflection_init_class_handlers(reflection_enum_case_ptr);
-	REGISTER_REFLECTION_CLASS_CONST_LONG(enum_case, "IS_FINAL", ZEND_ACC_FINAL);
+	reflection_enum_unit_case_ptr = register_class_ReflectionEnumUnitCase(reflection_class_constant_ptr);
+	reflection_init_class_handlers(reflection_enum_unit_case_ptr);
+	REGISTER_REFLECTION_CLASS_CONST_LONG(enum_unit_case, "IS_FINAL", ZEND_ACC_FINAL);
 
 	REGISTER_REFLECTION_CLASS_CONST_LONG(attribute, "IS_INSTANCEOF", REFLECTION_ATTRIBUTE_IS_INSTANCEOF);
 

@@ -32,18 +32,18 @@
 	} while (0);
 
 ZEND_API zend_class_entry *zend_ce_unit_enum;
-ZEND_API zend_class_entry *zend_ce_scalar_enum;
+ZEND_API zend_class_entry *zend_ce_backed_enum;
 
 static zend_object_handlers enum_handlers;
 
-zend_object *zend_enum_new(zval *result, zend_class_entry *ce, zend_string *case_name, zval *scalar_zv)
+zend_object *zend_enum_new(zval *result, zend_class_entry *ce, zend_string *case_name, zval *backing_value_zv)
 {
 	zend_object *zobj = zend_objects_new(ce);
 	ZVAL_OBJ(result, zobj);
 
 	ZVAL_STR_COPY(OBJ_PROP_NUM(zobj, 0), case_name);
-	if (scalar_zv != NULL) {
-		ZVAL_COPY(OBJ_PROP_NUM(zobj, 1), scalar_zv);
+	if (backing_value_zv != NULL) {
+		ZVAL_COPY(OBJ_PROP_NUM(zobj, 1), backing_value_zv);
 	}
 
 	zobj->handlers = &enum_handlers;
@@ -60,7 +60,7 @@ static void zend_verify_enum_properties(zend_class_entry *ce)
 			continue;
 		}
 		if (
-			ce->enum_scalar_type != IS_UNDEF
+			ce->enum_backing_type != IS_UNDEF
 			&& zend_string_equals_literal(property_info->name, "value")
 		) {
 			continue;
@@ -161,7 +161,7 @@ static int zend_implement_unit_enum(zend_class_entry *interface, zend_class_entr
 	return FAILURE;
 }
 
-static int zend_implement_scalar_enum(zend_class_entry *interface, zend_class_entry *class_type)
+static int zend_implement_backed_enum(zend_class_entry *interface, zend_class_entry *class_type)
 {
 	if (!(class_type->ce_flags & ZEND_ACC_ENUM)) {
 		zend_error_noreturn(E_ERROR, "Non-enum class %s cannot implement interface %s",
@@ -170,8 +170,8 @@ static int zend_implement_scalar_enum(zend_class_entry *interface, zend_class_en
 		return FAILURE;
 	}
 
-	if (class_type->enum_scalar_type == IS_UNDEF) {
-		zend_error_noreturn(E_ERROR, "Non-scalar enum %s cannot implement interface %s",
+	if (class_type->enum_backing_type == IS_UNDEF) {
+		zend_error_noreturn(E_ERROR, "Non-backed enum %s cannot implement interface %s",
 			ZSTR_VAL(class_type->name),
 			ZSTR_VAL(interface->name));
 		return FAILURE;
@@ -185,8 +185,8 @@ void zend_register_enum_ce(void)
 	zend_ce_unit_enum = register_class_UnitEnum();
 	zend_ce_unit_enum->interface_gets_implemented = zend_implement_unit_enum;
 
-	zend_ce_scalar_enum = register_class_ScalarEnum(zend_ce_unit_enum);
-	zend_ce_scalar_enum->interface_gets_implemented = zend_implement_scalar_enum;
+	zend_ce_backed_enum = register_class_BackedEnum(zend_ce_unit_enum);
+	zend_ce_backed_enum->interface_gets_implemented = zend_implement_backed_enum;
 
 	memcpy(&enum_handlers, &std_object_handlers, sizeof(zend_object_handlers));
 	enum_handlers.read_property = zend_enum_read_property;
@@ -202,7 +202,7 @@ void zend_enum_add_interfaces(zend_class_entry *ce)
 	uint32_t num_interfaces_before = ce->num_interfaces;
 
 	ce->num_interfaces++;
-	if (ce->enum_scalar_type != IS_UNDEF) {
+	if (ce->enum_backing_type != IS_UNDEF) {
 		ce->num_interfaces++;
 	}
 
@@ -211,9 +211,9 @@ void zend_enum_add_interfaces(zend_class_entry *ce)
 	ce->interface_names[num_interfaces_before].name = zend_string_init("UnitEnum", sizeof("UnitEnum") - 1, 0);
 	ce->interface_names[num_interfaces_before].lc_name = zend_string_init("unitenum", sizeof("unitenum") - 1, 0);
 
-	if (ce->enum_scalar_type != IS_UNDEF) {
-		ce->interface_names[num_interfaces_before + 1].name = zend_string_init("ScalarEnum", sizeof("ScalarEnum") - 1, 0);
-		ce->interface_names[num_interfaces_before + 1].lc_name = zend_string_init("scalarenum", sizeof("scalarenum") - 1, 0);	
+	if (ce->enum_backing_type != IS_UNDEF) {
+		ce->interface_names[num_interfaces_before + 1].name = zend_string_init("BackedEnum", sizeof("BackedEnum") - 1, 0);
+		ce->interface_names[num_interfaces_before + 1].lc_name = zend_string_init("backedenum", sizeof("backedenum") - 1, 0);	
 	}
 }
 
@@ -251,30 +251,30 @@ static void zend_enum_from_base(INTERNAL_FUNCTION_PARAMETERS, bool try)
 	zend_long long_key;
 
 	zval *case_name_zv;
-	if (ce->enum_scalar_type == IS_LONG) {
+	if (ce->enum_backing_type == IS_LONG) {
 		if (zend_parse_parameters(ZEND_NUM_ARGS(), "l", &long_key) == FAILURE) {
 			RETURN_THROWS();
 		}
 
-		case_name_zv = zend_hash_index_find(ce->enum_scalar_table, long_key);
+		case_name_zv = zend_hash_index_find(ce->backed_enum_table, long_key);
 	} else {
 		if (zend_parse_parameters(ZEND_NUM_ARGS(), "S", &string_key) == FAILURE) {
 			RETURN_THROWS();
 		}
 
-		ZEND_ASSERT(ce->enum_scalar_type == IS_STRING);
-		case_name_zv = zend_hash_find(ce->enum_scalar_table, string_key);
+		ZEND_ASSERT(ce->enum_backing_type == IS_STRING);
+		case_name_zv = zend_hash_find(ce->backed_enum_table, string_key);
 	}
 
 	if (case_name_zv == NULL) {
 		if (try) {
 			RETURN_NULL();
 		} else {
-			if (ce->enum_scalar_type == IS_LONG) {
-				zend_value_error("%d is not a valid scalar value for enum \"%s\"", (int) long_key, ZSTR_VAL(ce->name));
+			if (ce->enum_backing_type == IS_LONG) {
+				zend_value_error("%d is not a valid backing value for enum \"%s\"", (int) long_key, ZSTR_VAL(ce->name));
 			} else {
-				ZEND_ASSERT(ce->enum_scalar_type == IS_STRING);
-				zend_value_error("\"%s\" is not a valid scalar value for enum \"%s\"", ZSTR_VAL(string_key), ZSTR_VAL(ce->name));
+				ZEND_ASSERT(ce->enum_backing_type == IS_STRING);
+				zend_value_error("\"%s\" is not a valid backing value for enum \"%s\"", ZSTR_VAL(string_key), ZSTR_VAL(ce->name));
 			}
 			RETURN_THROWS();
 		}
@@ -320,7 +320,7 @@ void zend_enum_register_funcs(zend_class_entry *ce)
 	cases_function->arg_info = (zend_internal_arg_info *) (arginfo_class_UnitEnum_cases + 1);
 	zend_hash_add_ptr(&ce->function_table, ZSTR_KNOWN(ZEND_STR_CASES), cases_function);
 
-	if (ce->enum_scalar_type != IS_UNDEF) {
+	if (ce->enum_backing_type != IS_UNDEF) {
 		zend_internal_function *from_function =
 			zend_arena_alloc(&CG(arena), sizeof(zend_internal_function));
 		memset(from_function, 0, sizeof(zend_internal_function));
@@ -332,7 +332,7 @@ void zend_enum_register_funcs(zend_class_entry *ce)
 		from_function->fn_flags = fn_flags;
 		from_function->num_args = 1;
 		from_function->required_num_args = 1;
-		from_function->arg_info = (zend_internal_arg_info *) (arginfo_class_ScalarEnum_from + 1);
+		from_function->arg_info = (zend_internal_arg_info *) (arginfo_class_BackedEnum_from + 1);
 		zend_hash_add_ptr(&ce->function_table, ZSTR_KNOWN(ZEND_STR_FROM), from_function);
 
 		zend_internal_function *try_from_function =
@@ -346,7 +346,7 @@ void zend_enum_register_funcs(zend_class_entry *ce)
 		try_from_function->fn_flags = fn_flags;
 		try_from_function->num_args = 1;
 		try_from_function->required_num_args = 1;
-		try_from_function->arg_info = (zend_internal_arg_info *) (arginfo_class_ScalarEnum_tryFrom + 1);
+		try_from_function->arg_info = (zend_internal_arg_info *) (arginfo_class_BackedEnum_tryFrom + 1);
 		zend_hash_add_ptr(
 			&ce->function_table, ZSTR_KNOWN(ZEND_STR_TRYFROM_LOWERCASE), try_from_function);
 	}
@@ -359,10 +359,10 @@ void zend_enum_register_props(zend_class_entry *ce)
 	zend_type name_type = ZEND_TYPE_INIT_CODE(IS_STRING, 0, 0);
 	zend_declare_typed_property(ce, ZSTR_KNOWN(ZEND_STR_NAME), &name_default_value, ZEND_ACC_PUBLIC, NULL, name_type);
 
-	if (ce->enum_scalar_type != IS_UNDEF) {
+	if (ce->enum_backing_type != IS_UNDEF) {
 		zval value_default_value;
 		ZVAL_UNDEF(&value_default_value);
-		zend_type value_type = ZEND_TYPE_INIT_CODE(ce->enum_scalar_type, 0, 0);
+		zend_type value_type = ZEND_TYPE_INIT_CODE(ce->enum_backing_type, 0, 0);
 		zend_declare_typed_property(ce, ZSTR_KNOWN(ZEND_STR_VALUE), &value_default_value, ZEND_ACC_PUBLIC, NULL, value_type);
 	}
 }

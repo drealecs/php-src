@@ -1,5 +1,5 @@
 --TEST--
-Scalar enums reject duplicate string values
+Backed enums reject duplicate string values
 --FILE--
 <?php
 
