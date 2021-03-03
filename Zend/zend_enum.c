@@ -103,10 +103,24 @@ static void zend_verify_enum_magic_methods(zend_class_entry *ce)
 	}
 }
 
+static void zend_verify_enum_interfaces(zend_class_entry *ce)
+{
+	for (uint32_t i = 0; i < ce->num_interfaces; i++) {
+		zend_string *interface_name = ce->ce_flags & ZEND_ACC_RESOLVED_INTERFACES
+			? ce->interfaces[i]->name
+			: ce->interface_names[i].lc_name;
+
+		if (zend_string_equals_literal(interface_name, "serializable")) {
+			zend_error_noreturn(E_COMPILE_ERROR, "Enums may not implement the Serializable interface");
+		}
+	}
+}
+
 void zend_verify_enum(zend_class_entry *ce)
 {
 	zend_verify_enum_properties(ce);
 	zend_verify_enum_magic_methods(ce);
+	zend_verify_enum_interfaces(ce);
 }
 
 static zval *zend_enum_read_property(zend_object *zobj, zend_string *name, int type, void **cache_slot, zval *rv) /* {{{ */
@@ -205,6 +219,8 @@ void zend_enum_add_interfaces(zend_class_entry *ce)
 	if (ce->enum_backing_type != IS_UNDEF) {
 		ce->num_interfaces++;
 	}
+
+	ZEND_ASSERT(!(ce->ce_flags & ZEND_ACC_LINKED));
 
 	ce->interface_names = erealloc(ce->interface_names, sizeof(zend_class_name) * ce->num_interfaces);
 
