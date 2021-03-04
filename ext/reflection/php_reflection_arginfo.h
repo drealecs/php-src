@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 7a0e72d87c9d51907124bac58a1f902135575674 */
+ * Stub hash: b4ec9ccf1844750cdc959918192efb3d22b257ce */
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Reflection_getModifierNames, 0, 0, 1)
 	ZEND_ARG_TYPE_INFO(0, modifiers, IS_LONG, 0)
@@ -512,13 +512,15 @@ ZEND_END_ARG_INFO()
 
 #define arginfo_class_ReflectionEnumUnitCase___construct arginfo_class_ReflectionClassConstant___construct
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_class_ReflectionEnumUnitCase_getBackingValue, 0, 0, MAY_BE_LONG|MAY_BE_STRING|MAY_BE_NULL)
-ZEND_END_ARG_INFO()
-
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_ReflectionEnumUnitCase_getEnum, 0, 0, ReflectionEnum, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_ReflectionEnumUnitCase_getValue, 0, 0, UnitEnum, 0)
+ZEND_END_ARG_INFO()
+
+#define arginfo_class_ReflectionEnumBackedCase___construct arginfo_class_ReflectionClassConstant___construct
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_class_ReflectionEnumBackedCase_getBackingValue, 0, 0, MAY_BE_LONG|MAY_BE_STRING)
 ZEND_END_ARG_INFO()
 
 
@@ -731,8 +733,9 @@ ZEND_METHOD(ReflectionEnum, getCases);
 ZEND_METHOD(ReflectionEnum, isBacked);
 ZEND_METHOD(ReflectionEnum, getBackingType);
 ZEND_METHOD(ReflectionEnumUnitCase, __construct);
-ZEND_METHOD(ReflectionEnumUnitCase, getBackingValue);
 ZEND_METHOD(ReflectionEnumUnitCase, getEnum);
+ZEND_METHOD(ReflectionEnumBackedCase, __construct);
+ZEND_METHOD(ReflectionEnumBackedCase, getBackingValue);
 
 
 static const zend_function_entry class_ReflectionException_methods[] = {
@@ -1054,9 +1057,15 @@ static const zend_function_entry class_ReflectionEnum_methods[] = {
 
 static const zend_function_entry class_ReflectionEnumUnitCase_methods[] = {
 	ZEND_ME(ReflectionEnumUnitCase, __construct, arginfo_class_ReflectionEnumUnitCase___construct, ZEND_ACC_PUBLIC)
-	ZEND_ME(ReflectionEnumUnitCase, getBackingValue, arginfo_class_ReflectionEnumUnitCase_getBackingValue, ZEND_ACC_PUBLIC)
 	ZEND_ME(ReflectionEnumUnitCase, getEnum, arginfo_class_ReflectionEnumUnitCase_getEnum, ZEND_ACC_PUBLIC)
 	ZEND_MALIAS(ReflectionClassConstant, getValue, getValue, arginfo_class_ReflectionEnumUnitCase_getValue, ZEND_ACC_PUBLIC)
+	ZEND_FE_END
+};
+
+
+static const zend_function_entry class_ReflectionEnumBackedCase_methods[] = {
+	ZEND_ME(ReflectionEnumBackedCase, __construct, arginfo_class_ReflectionEnumBackedCase___construct, ZEND_ACC_PUBLIC)
+	ZEND_ME(ReflectionEnumBackedCase, getBackingValue, arginfo_class_ReflectionEnumBackedCase_getBackingValue, ZEND_ACC_PUBLIC)
 	ZEND_FE_END
 };
 
@@ -1341,6 +1350,16 @@ static zend_class_entry *register_class_ReflectionEnumUnitCase(zend_class_entry 
 
 	INIT_CLASS_ENTRY(ce, "ReflectionEnumUnitCase", class_ReflectionEnumUnitCase_methods);
 	class_entry = zend_register_internal_class_ex(&ce, class_entry_ReflectionClassConstant);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class_ReflectionEnumBackedCase(zend_class_entry *class_entry_ReflectionEnumUnitCase)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_CLASS_ENTRY(ce, "ReflectionEnumBackedCase", class_ReflectionEnumBackedCase_methods);
+	class_entry = zend_register_internal_class_ex(&ce, class_entry_ReflectionEnumUnitCase);
 	class_entry->ce_flags |= ZEND_ACC_FINAL;
 
 	return class_entry;

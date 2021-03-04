@@ -704,14 +704,19 @@ final class ReflectionEnum extends ReflectionClass
     public function getBackingType(): ReflectionType|null {}
 }
 
-final class ReflectionEnumUnitCase extends ReflectionClassConstant
+class ReflectionEnumUnitCase extends ReflectionClassConstant
 {
     public function __construct(object|string $class, string $constant) {}
-
-    public function getBackingValue(): int|string|null {}
 
     public function getEnum(): ReflectionEnum {}
 
     /** @implementation-alias ReflectionClassConstant::getValue */
     public function getValue(): UnitEnum {}
+}
+
+final class ReflectionEnumBackedCase extends ReflectionEnumUnitCase
+{
+    public function __construct(object|string $class, string $constant) {}
+
+    public function getBackingValue(): int|string {}
 }

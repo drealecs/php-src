@@ -90,6 +90,7 @@ PHPAPI zend_class_entry *reflection_reference_ptr;
 PHPAPI zend_class_entry *reflection_attribute_ptr;
 PHPAPI zend_class_entry *reflection_enum_ptr;
 PHPAPI zend_class_entry *reflection_enum_unit_case_ptr;
+PHPAPI zend_class_entry *reflection_enum_backed_case_ptr;
 
 /* Exception throwing macro */
 #define _DO_THROW(msg) \
@@ -1448,11 +1449,14 @@ static void reflection_class_constant_factory(zend_string *name_str, zend_class_
 }
 /* }}} */
 
-static void reflection_enum_case_factory(zend_string *name_str, zend_class_constant *constant, zval *object)
+static void reflection_enum_case_factory(zend_class_entry *ce, zend_string *name_str, zend_class_constant *constant, zval *object)
 {
 	reflection_object *intern;
 
-	reflection_instantiate(reflection_enum_unit_case_ptr, object);
+	zend_class_entry *case_reflection_class = ce->backed_enum_table == IS_UNDEF
+		? reflection_enum_unit_case_ptr
+		: reflection_enum_backed_case_ptr;
+	reflection_instantiate(case_reflection_class, object);
 	intern = Z_REFLECTION_P(object);
 	intern->ptr = constant;
 	intern->ref_type = REF_TYPE_CLASS_CONSTANT;
@@ -6595,7 +6599,7 @@ ZEND_METHOD(ReflectionEnum, getCase)
 		RETURN_FALSE;
 	}
 
-	reflection_enum_case_factory(name, constant, return_value);
+	reflection_enum_case_factory(ce, name, constant, return_value);
 }
 
 ZEND_METHOD(ReflectionEnum, getCases)
@@ -6615,7 +6619,7 @@ ZEND_METHOD(ReflectionEnum, getCases)
 	ZEND_HASH_FOREACH_STR_KEY_PTR(&ce->constants_table, name, constant) {
 		if (Z_ACCESS_FLAGS(constant->value) & ZEND_CLASS_CONST_IS_CASE) {
 			zval class_const;
-			reflection_enum_case_factory(name, constant, &class_const);
+			reflection_enum_case_factory(ce, name, constant, &class_const);
 			zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &class_const);
 		}
 	} ZEND_HASH_FOREACH_END();
@@ -6671,7 +6675,7 @@ ZEND_METHOD(ReflectionEnumUnitCase, __construct)
 	}
 }
 
-ZEND_METHOD(ReflectionEnumUnitCase, getBackingValue)
+ZEND_METHOD(ReflectionEnumBackedCase, getBackingValue)
 {
 	reflection_object *intern;
 	zend_class_constant *ref;
@@ -6685,10 +6689,7 @@ ZEND_METHOD(ReflectionEnumUnitCase, getBackingValue)
 		zval_update_constant_ex(&ref->value, ref->ce);
 	}
 
-	if (intern->ce->enum_backing_type == IS_UNDEF) {
-		RETURN_NULL();
-	}
-
+	ZEND_ASSERT(intern->ce->enum_backing_type != IS_UNDEF);
 	zval *member_p = zend_enum_fetch_case_value(Z_OBJ(ref->value));
 
 	ZVAL_COPY_OR_DUP(return_value, member_p);
@@ -6705,6 +6706,24 @@ ZEND_METHOD(ReflectionEnumUnitCase, getEnum)
 	GET_REFLECTION_OBJECT_PTR(ref);
 
 	zend_reflection_enum_factory(ref->ce, return_value);
+}
+
+ZEND_METHOD(ReflectionEnumBackedCase, __construct)
+{
+	ZEND_MN(ReflectionEnumUnitCase___construct)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+
+	reflection_object *intern;
+	zend_class_constant *ref;
+
+	GET_REFLECTION_OBJECT_PTR(ref);
+
+	if (ref->ce->enum_backing_type == IS_UNDEF) {
+		if (!EG(exception)) {
+			zval *case_name = reflection_prop_name(ZEND_THIS);
+			zend_throw_exception_ex(reflection_exception_ptr, 0, "Enum case %s::%s is not a backed case", ZSTR_VAL(ref->ce->name), Z_STRVAL_P(case_name));
+		}
+		RETURN_THROWS();
+	}
 }
 
 /* {{{ _reflection_write_property */
@@ -6821,7 +6840,10 @@ PHP_MINIT_FUNCTION(reflection) /* {{{ */
 
 	reflection_enum_unit_case_ptr = register_class_ReflectionEnumUnitCase(reflection_class_constant_ptr);
 	reflection_init_class_handlers(reflection_enum_unit_case_ptr);
-	REGISTER_REFLECTION_CLASS_CONST_LONG(enum_unit_case, "IS_FINAL", ZEND_ACC_FINAL);
+
+	reflection_enum_backed_case_ptr = register_class_ReflectionEnumBackedCase(reflection_enum_unit_case_ptr);
+	reflection_init_class_handlers(reflection_enum_backed_case_ptr);
+	REGISTER_REFLECTION_CLASS_CONST_LONG(enum_backed_case, "IS_FINAL", ZEND_ACC_FINAL);
 
 	REGISTER_REFLECTION_CLASS_CONST_LONG(attribute, "IS_INSTANCEOF", REFLECTION_ATTRIBUTE_IS_INSTANCEOF);
 
