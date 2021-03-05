@@ -520,10 +520,7 @@ static int php_json_encode_serializable_enum(smart_str *buf, zval *val, int opti
 	}
 
 	zval *value_zv = zend_enum_fetch_case_value(Z_OBJ_P(val));
-
-	int result = php_json_encode_zval(buf, value_zv, options, encoder);
-
-	return result;
+	return php_json_encode_zval(buf, value_zv, options, encoder);
 }
 
 int php_json_encode_zval(smart_str *buf, zval *val, int options, php_json_encoder *encoder) /* {{{ */

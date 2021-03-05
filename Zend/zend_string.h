@@ -553,7 +553,6 @@ EMPTY_SWITCH_DEFAULT_CASE()
 	_(ZEND_STR_MIXED,                  "mixed") \
 	_(ZEND_STR_SLEEP,                  "__sleep") \
 	_(ZEND_STR_WAKEUP,                 "__wakeup") \
-	_(ZEND_STR_ENUM,                   "enum") \
 	_(ZEND_STR_CASES,                  "cases") \
 	_(ZEND_STR_FROM,                   "from") \
 	_(ZEND_STR_TRYFROM,                "tryFrom") \

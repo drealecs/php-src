@@ -20,6 +20,7 @@
 #include "zend_API.h"
 #include "zend_compile.h"
 #include "zend_enum_arginfo.h"
+#include "zend_interfaces.h"
 
 #define ZEND_ENUM_PROPERTY_ERROR() \
 	zend_throw_error(NULL, "Enum properties are immutable")
@@ -87,7 +88,7 @@ static void zend_verify_enum_magic_methods(zend_class_entry *ce)
 	ZEND_ENUM_DISALLOW_MAGIC_METHOD(__serialize, "__serialize");
 	ZEND_ENUM_DISALLOW_MAGIC_METHOD(__unserialize, "__unserialize");
 
-	const char* forbidden_methods[] = {
+	const char *forbidden_methods[] = {
 		"__sleep",
 		"__wakeup",
 		"__set_state",
@@ -97,7 +98,7 @@ static void zend_verify_enum_magic_methods(zend_class_entry *ce)
 	for (uint32_t i = 0; i < forbidden_methods_length; ++i) {
 		const char *forbidden_method = forbidden_methods[i];
 
-		if (zend_hash_str_find_ptr(&ce->function_table, forbidden_method, strlen(forbidden_method))) {
+		if (zend_hash_str_exists(&ce->function_table, forbidden_method, strlen(forbidden_method))) {
 			zend_error_noreturn(E_COMPILE_ERROR, "Enum may not include magic method %s", forbidden_method);
 		}
 	}
@@ -105,14 +106,9 @@ static void zend_verify_enum_magic_methods(zend_class_entry *ce)
 
 static void zend_verify_enum_interfaces(zend_class_entry *ce)
 {
-	for (uint32_t i = 0; i < ce->num_interfaces; i++) {
-		zend_string *interface_name = ce->ce_flags & ZEND_ACC_RESOLVED_INTERFACES
-			? ce->interfaces[i]->name
-			: ce->interface_names[i].lc_name;
-
-		if (zend_string_equals_literal(interface_name, "serializable")) {
-			zend_error_noreturn(E_COMPILE_ERROR, "Enums may not implement the Serializable interface");
-		}
+	if (zend_class_implements_interface(ce, zend_ce_serializable)) {
+		zend_error_noreturn(E_COMPILE_ERROR,
+			"Enums may not implement the Serializable interface");
 	}
 }
 
@@ -125,11 +121,7 @@ void zend_verify_enum(zend_class_entry *ce)
 
 static zval *zend_enum_read_property(zend_object *zobj, zend_string *name, int type, void **cache_slot, zval *rv) /* {{{ */
 {
-	if (
-		type == BP_VAR_W
-		|| type == BP_VAR_RW
-		|| type == BP_VAR_UNSET
-	) {
+	if (type == BP_VAR_W || type == BP_VAR_RW || type == BP_VAR_UNSET) {
 		zend_throw_error(NULL, "Cannot acquire reference to property %s::$%s", ZSTR_VAL(zobj->ce->name), ZSTR_VAL(name));
 		return &EG(uninitialized_zval);
 	}
@@ -151,15 +143,6 @@ static ZEND_COLD void zend_enum_unset_property(zend_object *object, zend_string 
 static zval *zend_enum_get_property_ptr_ptr(zend_object *zobj, zend_string *name, int type, void **cache_slot)
 {
 	return NULL;
-}
-
-static int zend_enum_compare_objects(zval *o1, zval *o2)
-{
-	if (Z_TYPE_P(o1) != IS_OBJECT || Z_TYPE_P(o2) != IS_OBJECT) {
-		return ZEND_UNCOMPARABLE;
-	}
-
-	return Z_OBJ_P(o1) == Z_OBJ_P(o2) ? 0 : 1;
 }
 
 static int zend_implement_unit_enum(zend_class_entry *interface, zend_class_entry *class_type)
@@ -208,7 +191,7 @@ void zend_register_enum_ce(void)
 	enum_handlers.unset_property = zend_enum_unset_property;
 	enum_handlers.get_property_ptr_ptr = zend_enum_get_property_ptr_ptr;
 	enum_handlers.clone_obj = NULL;
-	enum_handlers.compare = zend_enum_compare_objects;
+	enum_handlers.compare = zend_objects_not_comparable;
 }
 
 void zend_enum_add_interfaces(zend_class_entry *ce)
@@ -220,15 +203,15 @@ void zend_enum_add_interfaces(zend_class_entry *ce)
 		ce->num_interfaces++;
 	}
 
-	ZEND_ASSERT(!(ce->ce_flags & ZEND_ACC_LINKED));
+	ZEND_ASSERT(!(ce->ce_flags & ZEND_ACC_RESOLVED_INTERFACES));
 
 	ce->interface_names = erealloc(ce->interface_names, sizeof(zend_class_name) * ce->num_interfaces);
 
-	ce->interface_names[num_interfaces_before].name = zend_string_init("UnitEnum", sizeof("UnitEnum") - 1, 0);
+	ce->interface_names[num_interfaces_before].name = zend_string_copy(zend_ce_unit_enum->name);
 	ce->interface_names[num_interfaces_before].lc_name = zend_string_init("unitenum", sizeof("unitenum") - 1, 0);
 
 	if (ce->enum_backing_type != IS_UNDEF) {
-		ce->interface_names[num_interfaces_before + 1].name = zend_string_init("BackedEnum", sizeof("BackedEnum") - 1, 0);
+		ce->interface_names[num_interfaces_before + 1].name = zend_string_copy(zend_ce_backed_enum->name);
 		ce->interface_names[num_interfaces_before + 1].lc_name = zend_string_init("backedenum", sizeof("backedenum") - 1, 0);	
 	}
 }
@@ -238,9 +221,7 @@ static ZEND_NAMED_FUNCTION(zend_enum_cases_func)
 	zend_class_entry *ce = execute_data->func->common.scope;
 	zend_class_constant *c;
 
-	if (zend_parse_parameters_none() == FAILURE) {
-		RETURN_THROWS();
-	}
+	ZEND_PARSE_PARAMETERS_NONE();
 
 	array_init(return_value);
 
@@ -250,9 +231,8 @@ static ZEND_NAMED_FUNCTION(zend_enum_cases_func)
 		}
 		zval *zv = &c->value;
 		if (Z_TYPE_P(zv) == IS_CONSTANT_AST) {
-			zval_update_constant_ex(zv, c->ce);
-			if (UNEXPECTED(EG(exception) != NULL)) {
-				return;
+			if (zval_update_constant_ex(zv, c->ce) == FAILURE) {
+				RETURN_THROWS();
 			}
 		}
 		Z_ADDREF_P(zv);
@@ -268,15 +248,15 @@ static void zend_enum_from_base(INTERNAL_FUNCTION_PARAMETERS, bool try)
 
 	zval *case_name_zv;
 	if (ce->enum_backing_type == IS_LONG) {
-		if (zend_parse_parameters(ZEND_NUM_ARGS(), "l", &long_key) == FAILURE) {
-			RETURN_THROWS();
-		}
+		ZEND_PARSE_PARAMETERS_START(1, 1)
+			Z_PARAM_LONG(long_key)
+		ZEND_PARSE_PARAMETERS_END();
 
 		case_name_zv = zend_hash_index_find(ce->backed_enum_table, long_key);
 	} else {
-		if (zend_parse_parameters(ZEND_NUM_ARGS(), "S", &string_key) == FAILURE) {
-			RETURN_THROWS();
-		}
+		ZEND_PARSE_PARAMETERS_START(1, 1)
+			Z_PARAM_STR(string_key)
+		ZEND_PARSE_PARAMETERS_END();
 
 		ZEND_ASSERT(ce->enum_backing_type == IS_STRING);
 		case_name_zv = zend_hash_find(ce->backed_enum_table, string_key);
@@ -285,24 +265,25 @@ static void zend_enum_from_base(INTERNAL_FUNCTION_PARAMETERS, bool try)
 	if (case_name_zv == NULL) {
 		if (try) {
 			RETURN_NULL();
-		} else {
-			if (ce->enum_backing_type == IS_LONG) {
-				zend_value_error("%d is not a valid backing value for enum \"%s\"", (int) long_key, ZSTR_VAL(ce->name));
-			} else {
-				ZEND_ASSERT(ce->enum_backing_type == IS_STRING);
-				zend_value_error("\"%s\" is not a valid backing value for enum \"%s\"", ZSTR_VAL(string_key), ZSTR_VAL(ce->name));
-			}
-			RETURN_THROWS();
 		}
+
+		if (ce->enum_backing_type == IS_LONG) {
+			zend_value_error(ZEND_LONG_FMT " is not a valid backing value for enum \"%s\"", long_key, ZSTR_VAL(ce->name));
+		} else {
+			ZEND_ASSERT(ce->enum_backing_type == IS_STRING);
+			zend_value_error("\"%s\" is not a valid backing value for enum \"%s\"", ZSTR_VAL(string_key), ZSTR_VAL(ce->name));
+		}
+		RETURN_THROWS();
 	}
 
+	// TODO: We might want to store pointers to constants in backed_enum_table instead of names,
+	// to make this lookup more efficient.
 	ZEND_ASSERT(Z_TYPE_P(case_name_zv) == IS_STRING);
 	zend_class_constant *c = zend_hash_find_ptr(CE_CONSTANTS_TABLE(ce), Z_STR_P(case_name_zv));
 	ZEND_ASSERT(c != NULL);
 	zval *case_zv = &c->value;
 	if (Z_TYPE_P(case_zv) == IS_CONSTANT_AST) {
-		zval_update_constant_ex(case_zv, c->ce);
-		if (UNEXPECTED(EG(exception) != NULL)) {
+		if (zval_update_constant_ex(case_zv, c->ce) == FAILURE) {
 			RETURN_THROWS();
 		}
 	}
