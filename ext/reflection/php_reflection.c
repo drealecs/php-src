@@ -1258,7 +1258,7 @@ PHPAPI void zend_reflection_class_factory(zend_class_entry *ce, zval *object)
 }
 /* }}} */
 
-PHPAPI void zend_reflection_enum_factory(zend_class_entry *ce, zval *object)
+static void zend_reflection_enum_factory(zend_class_entry *ce, zval *object)
 {
 	reflection_object *intern;
 
@@ -6549,15 +6549,16 @@ ZEND_METHOD(ReflectionAttribute, newInstance)
 ZEND_METHOD(ReflectionEnum, __construct)
 {
 	reflection_class_object_ctor(INTERNAL_FUNCTION_PARAM_PASSTHRU, 0);
+	if (EG(exception)) {
+		RETURN_THROWS();
+	}
 
 	reflection_object *intern;
 	zend_class_entry *ce;
 	GET_REFLECTION_OBJECT_PTR(ce);
 
 	if (!(ce->ce_flags & ZEND_ACC_ENUM)) {
-		if (!EG(exception)) {
-			zend_throw_exception_ex(reflection_exception_ptr, -1, "Class \"%s\" is not an enum", ZSTR_VAL(ce->name));
-		}
+		zend_throw_exception_ex(reflection_exception_ptr, -1, "Class \"%s\" is not an enum", ZSTR_VAL(ce->name));
 		RETURN_THROWS();
 	}
 }
@@ -6660,6 +6661,9 @@ ZEND_METHOD(ReflectionEnum, getBackingType)
 ZEND_METHOD(ReflectionEnumUnitCase, __construct)
 {
 	ZEND_MN(ReflectionClassConstant___construct)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+	if (EG(exception)) {
+		RETURN_THROWS();
+	}
 
 	reflection_object *intern;
 	zend_class_constant *ref;
@@ -6667,10 +6671,40 @@ ZEND_METHOD(ReflectionEnumUnitCase, __construct)
 	GET_REFLECTION_OBJECT_PTR(ref);
 
 	if (!(Z_ACCESS_FLAGS(ref->value) & ZEND_CLASS_CONST_IS_CASE)) {
-		if (!EG(exception)) {
-			zval *case_name = reflection_prop_name(ZEND_THIS);
-			zend_throw_exception_ex(reflection_exception_ptr, 0, "Constant %s::%s is not a case", ZSTR_VAL(ref->ce->name), Z_STRVAL_P(case_name));
-		}
+		zval *case_name = reflection_prop_name(ZEND_THIS);
+		zend_throw_exception_ex(reflection_exception_ptr, 0, "Constant %s::%s is not a case", ZSTR_VAL(ref->ce->name), Z_STRVAL_P(case_name));
+		RETURN_THROWS();
+	}
+}
+
+ZEND_METHOD(ReflectionEnumUnitCase, getEnum)
+{
+	reflection_object *intern;
+	zend_class_constant *ref;
+
+	if (zend_parse_parameters_none() == FAILURE) {
+		RETURN_THROWS();
+	}
+	GET_REFLECTION_OBJECT_PTR(ref);
+
+	zend_reflection_enum_factory(ref->ce, return_value);
+}
+
+ZEND_METHOD(ReflectionEnumBackedCase, __construct)
+{
+	ZEND_MN(ReflectionEnumUnitCase___construct)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
+	if (EG(exception)) {
+		RETURN_THROWS();
+	}
+
+	reflection_object *intern;
+	zend_class_constant *ref;
+
+	GET_REFLECTION_OBJECT_PTR(ref);
+
+	if (ref->ce->enum_backing_type == IS_UNDEF) {
+		zval *case_name = reflection_prop_name(ZEND_THIS);
+		zend_throw_exception_ex(reflection_exception_ptr, 0, "Enum case %s::%s is not a backed case", ZSTR_VAL(ref->ce->name), Z_STRVAL_P(case_name));
 		RETURN_THROWS();
 	}
 }
@@ -6693,37 +6727,6 @@ ZEND_METHOD(ReflectionEnumBackedCase, getBackingValue)
 	zval *member_p = zend_enum_fetch_case_value(Z_OBJ(ref->value));
 
 	ZVAL_COPY_OR_DUP(return_value, member_p);
-}
-
-ZEND_METHOD(ReflectionEnumUnitCase, getEnum)
-{
-	reflection_object *intern;
-	zend_class_constant *ref;
-
-	if (zend_parse_parameters_none() == FAILURE) {
-		RETURN_THROWS();
-	}
-	GET_REFLECTION_OBJECT_PTR(ref);
-
-	zend_reflection_enum_factory(ref->ce, return_value);
-}
-
-ZEND_METHOD(ReflectionEnumBackedCase, __construct)
-{
-	ZEND_MN(ReflectionEnumUnitCase___construct)(INTERNAL_FUNCTION_PARAM_PASSTHRU);
-
-	reflection_object *intern;
-	zend_class_constant *ref;
-
-	GET_REFLECTION_OBJECT_PTR(ref);
-
-	if (ref->ce->enum_backing_type == IS_UNDEF) {
-		if (!EG(exception)) {
-			zval *case_name = reflection_prop_name(ZEND_THIS);
-			zend_throw_exception_ex(reflection_exception_ptr, 0, "Enum case %s::%s is not a backed case", ZSTR_VAL(ref->ce->name), Z_STRVAL_P(case_name));
-		}
-		RETURN_THROWS();
-	}
 }
 
 /* {{{ _reflection_write_property */

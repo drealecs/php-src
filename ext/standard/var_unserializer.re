@@ -1309,23 +1309,17 @@ object ":" uiv ":" ["]	{
 	return object_common(UNSERIALIZE_PASSTHRU, elements, has_unserialize);
 }
 
-"E:" uiv ":" ["]	{
-	size_t len, maxlen;
-	char *str;
-	zend_string *enum_name, *case_name;
-	zend_class_entry *ce;
-
+"E:" uiv ":" ["] {
 	if (!var_hash) return 0;
 
-	len = parse_uiv(start + 2);
-	maxlen = max - YYCURSOR;
+	size_t len = parse_uiv(start + 2);
+	size_t maxlen = max - YYCURSOR;
 	if (maxlen < len || len == 0) {
 		*p = start + 2;
 		return 0;
 	}
 
-	str = (char*)YYCURSOR;
-
+	char *str = (char *) YYCURSOR;
 	YYCURSOR += len;
 
 	if (*(YYCURSOR) != '"') {
@@ -1344,14 +1338,14 @@ object ":" uiv ":" ["]	{
 	}
 	size_t colon_pos = colon_ptr - str;
 
-	enum_name = zend_string_init(str, colon_pos, 0);
-	case_name = zend_string_init(&str[colon_pos + 1], len - colon_pos - 1, 0);
+	zend_string *enum_name = zend_string_init(str, colon_pos, 0);
+	zend_string *case_name = zend_string_init(&str[colon_pos + 1], len - colon_pos - 1, 0);
 
 	if (!zend_is_valid_class_name(enum_name)) {
 		goto fail;
 	}
 
-	ce = zend_lookup_class(enum_name);
+	zend_class_entry *ce = zend_lookup_class(enum_name);
 	if (!ce) {
 		php_error_docref(NULL, E_WARNING, "Class '%s' not found", ZSTR_VAL(enum_name));
 		goto fail;
@@ -1361,20 +1355,15 @@ object ":" uiv ":" ["]	{
 		goto fail;
 	}
 
-	if (EG(exception)) {
-		goto fail;
-	}
-
 	YYCURSOR += 2;
 	*p = YYCURSOR;
 
-	zval *zv = zend_hash_find(CE_CONSTANTS_TABLE(ce), case_name);
-	if (!zv) {
+	zend_class_constant *c = zend_hash_find_ptr(CE_CONSTANTS_TABLE(ce), case_name);
+	if (!c) {
 		php_error_docref(NULL, E_WARNING, "Undefined constant %s::%s", ZSTR_VAL(enum_name), ZSTR_VAL(case_name));
 		goto fail;
 	}
 
-	zend_class_constant *c = Z_PTR_P(zv);
 	if (!(Z_ACCESS_FLAGS(c->value) & ZEND_CLASS_CONST_IS_CASE)) {
 		php_error_docref(NULL, E_WARNING, "%s::%s is not an enum case", ZSTR_VAL(enum_name), ZSTR_VAL(case_name));
 		goto fail;
@@ -1385,8 +1374,7 @@ object ":" uiv ":" ["]	{
 
 	zval *value = &c->value;
 	if (Z_TYPE_P(value) == IS_CONSTANT_AST) {
-		zval_update_constant_ex(value, c->ce);
-		if (UNEXPECTED(EG(exception) != NULL)) {
+		if (zval_update_constant_ex(value, c->ce) == FAILURE) {
 			return 0;
 		}
 	}

@@ -145,13 +145,11 @@ again:
 			}
 			PUTS("}\n");
 			break;
-		case IS_OBJECT:
-			class_name = Z_OBJ_HANDLER_P(struc, get_class_name)(Z_OBJ_P(struc));
-
+		case IS_OBJECT: {
 			zend_class_entry *ce = Z_OBJCE_P(struc);
 			if (ce->ce_flags & ZEND_ACC_ENUM) {
 				zval *case_name_zval = zend_enum_fetch_case_name(Z_OBJ_P(struc));
-				php_printf("%senum(%s::%s)\n", COMMON, ZSTR_VAL(class_name), Z_STRVAL_P(case_name_zval));
+				php_printf("%senum(%s::%s)\n", COMMON, ZSTR_VAL(ce->name), Z_STRVAL_P(case_name_zval));
 				return;
 			}
 
@@ -162,6 +160,7 @@ again:
 			Z_PROTECT_RECURSION_P(struc);
 
 			myht = zend_get_properties_for(struc, ZEND_PROP_PURPOSE_DEBUG);
+			class_name = Z_OBJ_HANDLER_P(struc, get_class_name)(Z_OBJ_P(struc));
 			php_printf("%sobject(%s)#%d (%d) {\n", COMMON, ZSTR_VAL(class_name), Z_OBJ_HANDLE_P(struc), myht ? zend_array_count(myht) : 0);
 			zend_string_release_ex(class_name, 0);
 
@@ -192,6 +191,7 @@ again:
 			PUTS("}\n");
 			Z_UNPROTECT_RECURSION_P(struc);
 			break;
+		}
 		case IS_RESOURCE: {
 			const char *type_name = zend_rsrc_list_get_rsrc_type(Z_RES_P(struc));
 			php_printf("%sresource(%d) of type (%s)\n", COMMON, Z_RES_P(struc)->handle, type_name ? type_name : "Unknown");

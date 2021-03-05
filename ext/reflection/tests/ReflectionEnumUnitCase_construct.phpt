@@ -22,8 +22,15 @@ try {
     echo $e->getMessage() . "\n";
 }
 
+try {
+    new ReflectionEnumUnitCase([], 'Foo');
+} catch (Error $e) {
+    echo $e->getMessage() . "\n";
+}
+
 ?>
 --EXPECT--
 Bar
 Constant Foo::Baz is not a case
 Constant Foo::Qux does not exist
+ReflectionEnumUnitCase::__construct(): Argument #1 ($class) must be of type object|string, array given
