@@ -694,7 +694,7 @@ final class ReflectionEnum extends ReflectionClass
 
     public function hasCase(string $name): bool {}
 
-    public function getCase(string $name): ReflectionEnumUnitCase|false {}
+    public function getCase(string $name): ReflectionEnumUnitCase {}
 
     /** @return ReflectionEnumUnitCase[] */
     public function getCases(): array {}

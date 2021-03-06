@@ -13,15 +13,22 @@ enum IntEnum: int {
     const Bar = self::Foo;
 }
 
-$reflectionEnum = new ReflectionEnum(Enum_::class);
-var_dump($reflectionEnum->getCase('Foo'));
-var_dump($reflectionEnum->getCase('Bar'));
-var_dump($reflectionEnum->getCase('Baz'));
+function test(string $enumName, string $caseName) {
+    try {
+        $reflectionEnum = new ReflectionEnum($enumName);
+        var_dump($reflectionEnum->getCase($caseName));
+    } catch (Throwable $e) {
+        echo get_class($e) . ': ' . $e->getMessage() . "\n";
+    }
+}
 
-$reflectionEnum = new ReflectionEnum(IntEnum::class);
-var_dump($reflectionEnum->getCase('Foo'));
-var_dump($reflectionEnum->getCase('Bar'));
-var_dump($reflectionEnum->getCase('Baz'));
+test(Enum_::class, 'Foo');
+test(Enum_::class, 'Bar');
+test(Enum_::class, 'Baz');
+
+test(IntEnum::class, 'Foo');
+test(IntEnum::class, 'Bar');
+test(IntEnum::class, 'Baz');
 
 ?>
 --EXPECT--
@@ -31,13 +38,13 @@ object(ReflectionEnumUnitCase)#2 (2) {
   ["class"]=>
   string(5) "Enum_"
 }
-bool(false)
-bool(false)
-object(ReflectionEnumBackedCase)#1 (2) {
+ReflectionException: Enum_::Bar is not a case
+ReflectionException: Case Enum_::Baz does not exist
+object(ReflectionEnumBackedCase)#2 (2) {
   ["name"]=>
   string(3) "Foo"
   ["class"]=>
   string(7) "IntEnum"
 }
-bool(false)
-bool(false)
+ReflectionException: IntEnum::Bar is not a case
+ReflectionException: Case IntEnum::Baz does not exist

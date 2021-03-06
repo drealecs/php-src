@@ -6596,8 +6596,13 @@ ZEND_METHOD(ReflectionEnum, getCase)
 	GET_REFLECTION_OBJECT_PTR(ce);
 
 	zend_class_constant *constant = zend_hash_find_ptr(&ce->constants_table, name);
-	if (constant == NULL || !(Z_ACCESS_FLAGS(constant->value) & ZEND_CLASS_CONST_IS_CASE)) {
-		RETURN_FALSE;
+	if (constant == NULL) {
+		zend_throw_exception_ex(reflection_exception_ptr, 0, "Case %s::%s does not exist", ZSTR_VAL(ce->name), ZSTR_VAL(name));
+		RETURN_THROWS();
+	}
+	if (!(Z_ACCESS_FLAGS(constant->value) & ZEND_CLASS_CONST_IS_CASE)) {
+		zend_throw_exception_ex(reflection_exception_ptr, 0, "%s::%s is not a case", ZSTR_VAL(ce->name), ZSTR_VAL(name));
+		RETURN_THROWS();
 	}
 
 	reflection_enum_case_factory(ce, name, constant, return_value);
