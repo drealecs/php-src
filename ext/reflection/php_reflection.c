@@ -6811,6 +6811,7 @@ PHP_MINIT_FUNCTION(reflection) /* {{{ */
 	/* IS_IMPLICIT_ABSTRACT is not longer used */
 	REGISTER_REFLECTION_CLASS_CONST_LONG(class, "IS_IMPLICIT_ABSTRACT", ZEND_ACC_IMPLICIT_ABSTRACT_CLASS);
 	REGISTER_REFLECTION_CLASS_CONST_LONG(class, "IS_EXPLICIT_ABSTRACT", ZEND_ACC_EXPLICIT_ABSTRACT_CLASS);
+	REGISTER_REFLECTION_CLASS_CONST_LONG(class, "IS_FINAL", ZEND_ACC_FINAL); 
 
 	reflection_object_ptr = register_class_ReflectionObject(reflection_class_ptr);
 	reflection_init_class_handlers(reflection_object_ptr);
@@ -6844,7 +6845,6 @@ PHP_MINIT_FUNCTION(reflection) /* {{{ */
 
 	reflection_enum_ptr = register_class_ReflectionEnum(reflection_class_ptr);
 	reflection_init_class_handlers(reflection_enum_ptr);
-	REGISTER_REFLECTION_CLASS_CONST_LONG(enum, "IS_FINAL", ZEND_ACC_FINAL);
 
 	reflection_enum_unit_case_ptr = register_class_ReflectionEnumUnitCase(reflection_class_constant_ptr);
 	reflection_init_class_handlers(reflection_enum_unit_case_ptr);
