@@ -7,6 +7,16 @@ namespace enum {
     class Foo {}
 }
 
+namespace foo {
+    class Bar {}
+    class enum extends Bar {}
+}
+
+namespace bar {
+    interface Baz {}
+    class enum implements Baz {}
+}
+
 namespace {
     class enum {}
 
