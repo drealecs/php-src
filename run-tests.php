@@ -2751,7 +2751,7 @@ COMMAND $cmd
         if (!strcmp($output, $wanted)) {
             $passed = true;
 
-            if (!$cfg['keep']['php']) {
+            if (!$cfg['keep']['php'] && !$leaked) {
                 @unlink($test_file);
             }
             @unlink($tmp_post);
@@ -3749,7 +3749,11 @@ class SkipCache
 
         save_text($checkFile, $code, $tempFile);
         $result = trim(system_with_timeout("$php \"$checkFile\"", $env));
-        $this->skips[$key][$code] = $result;
+        if (strpos($result, 'nocache') !== 0) {
+            $this->skips[$key][$code] = $result;
+        } else {
+            $result = '';
+        }
         $this->misses++;
 
         if (!$this->keepFile) {
@@ -3792,7 +3796,6 @@ class RuntestsValgrind
 {
     protected $version = '';
     protected $header = '';
-    protected $version_3_3_0 = false;
     protected $version_3_8_0 = false;
     protected $tool = null;
 
@@ -3822,7 +3825,6 @@ class RuntestsValgrind
         $this->version = $version;
         $this->header = sprintf(
             "%s (%s)", trim($header), $this->tool);
-        $this->version_3_3_0 = version_compare($version, '3.3.0', '>=');
         $this->version_3_8_0 = version_compare($version, '3.8.0', '>=');
     }
 
@@ -3835,13 +3837,9 @@ class RuntestsValgrind
 
         /* --vex-iropt-register-updates=allregs-at-mem-access is necessary for phpdbg watchpoint tests */
         if ($this->version_3_8_0) {
-            /* valgrind 3.3.0+ doesn't have --log-file-exactly option */
             return "$vcmd --vex-iropt-register-updates=allregs-at-mem-access --log-file=$memcheck_filename $cmd";
-        } elseif ($this->version_3_3_0) {
-            return "$vcmd --vex-iropt-precise-memory-exns=yes --log-file=$memcheck_filename $cmd";
-        } else {
-            return "$vcmd --vex-iropt-precise-memory-exns=yes --log-file-exactly=$memcheck_filename $cmd";
         }
+        return "$vcmd --vex-iropt-precise-memory-exns=yes --log-file=$memcheck_filename $cmd";
     }
 }
 
