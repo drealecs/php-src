@@ -6035,18 +6035,16 @@ PHP_FUNCTION(array_reduce)
 
 	ZEND_HASH_FOREACH_VAL(htbl, operand) {
 		ZVAL_COPY_VALUE(&args[0], return_value);
-		ZVAL_COPY(&args[1], operand);
+		ZVAL_COPY_VALUE(&args[1], operand);
 		fci.params = args;
 
 		if (zend_call_function(&fci, &fci_cache) == SUCCESS && Z_TYPE(retval) != IS_UNDEF) {
-			zval_ptr_dtor(&args[1]);
 			zval_ptr_dtor(&args[0]);
 			ZVAL_COPY_VALUE(return_value, &retval);
 			if (UNEXPECTED(Z_ISREF_P(return_value))) {
 				zend_unwrap_reference(return_value);
 			}
 		} else {
-			zval_ptr_dtor(&args[1]);
 			zval_ptr_dtor(&args[0]);
 			RETURN_NULL();
 		}
