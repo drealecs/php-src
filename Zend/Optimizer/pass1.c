@@ -65,6 +65,53 @@ void zend_optimizer_pass1(zend_op_array *op_array, zend_optimizer_ctx *ctx)
 
 	while (opline < end) {
 		switch (opline->opcode) {
+		case ZEND_FETCH_R:
+			if ((opline + 3) < end
+					&& (opline + 1)->opcode == ZEND_CONCAT
+					&& (opline + 1)->op1_type == IS_TMP_VAR
+					&& (opline + 1)->op1.var == opline->result.var
+					&& ((opline + 1)->op2_type == IS_CONST || (opline + 1)->op2_type == IS_CV)
+					&& (opline + 2)->opcode == ZEND_FETCH_W
+					&& opline->op1_type == (opline + 2)->op1_type
+					&& (opline->extended_value & ZEND_FETCH_TYPE_MASK)
+						== ((opline + 2)->extended_value & ZEND_FETCH_TYPE_MASK)
+					&& (opline + 3)->opcode == ZEND_ASSIGN
+					&& (opline + 3)->op1_type == IS_VAR
+					&& (opline + 3)->op1.var == (opline + 2)->result.var
+					&& (opline + 3)->op2_type == IS_TMP_VAR
+					&& (opline + 3)->op2.var == (opline + 1)->result.var) {
+				bool same_fetch_op1;
+
+				if (opline->op1_type == IS_CONST) {
+					same_fetch_op1 = zend_is_identical(
+						&ZEND_OP1_LITERAL(opline),
+						&ZEND_OP1_LITERAL(opline + 2));
+				} else {
+					same_fetch_op1 = opline->op1.var == (opline + 2)->op1.var;
+				}
+
+				if (same_fetch_op1) {
+					zend_op *concat_opline = opline + 1;
+					zend_op *fetch_w_opline = opline + 2;
+					zend_op *assign_opline = opline + 3;
+
+					opline->opcode = ZEND_FETCH_RW;
+					opline->result_type = fetch_w_opline->result_type;
+					opline->result = fetch_w_opline->result;
+
+					concat_opline->opcode = ZEND_ASSIGN_OP;
+					concat_opline->extended_value = ZEND_CONCAT;
+					concat_opline->op1_type = opline->result_type;
+					concat_opline->op1 = opline->result;
+					concat_opline->result_type = assign_opline->result_type;
+					concat_opline->result = assign_opline->result;
+
+					MAKE_NOP(fetch_w_opline);
+					MAKE_NOP(assign_opline);
+				}
+			}
+			break;
+
 		case ZEND_CONCAT:
 		case ZEND_FAST_CONCAT:
 			if (opline->op1_type == IS_CONST && Z_TYPE(ZEND_OP1_LITERAL(opline)) != IS_STRING) {
@@ -72,6 +119,23 @@ void zend_optimizer_pass1(zend_op_array *op_array, zend_optimizer_ctx *ctx)
 			}
 			if (opline->op2_type == IS_CONST && Z_TYPE(ZEND_OP2_LITERAL(opline)) != IS_STRING) {
 				TO_STRING_NOWARN(&ZEND_OP2_LITERAL(opline));
+			}
+			if (opline->opcode == ZEND_CONCAT
+					&& opline->op1_type == IS_CV
+					&& opline->result_type == IS_TMP_VAR
+					&& (opline + 1) < end
+					&& (opline + 1)->opcode == ZEND_ASSIGN
+					&& (opline + 1)->op1_type == IS_CV
+					&& (opline + 1)->op2_type == IS_TMP_VAR
+					&& opline->op1.var == (opline + 1)->op1.var
+					&& opline->result.var == (opline + 1)->op2.var) {
+				zend_op *assign_opline = opline + 1;
+
+				opline->opcode = ZEND_ASSIGN_OP;
+				opline->extended_value = ZEND_CONCAT;
+				opline->result_type = assign_opline->result_type;
+				opline->result = assign_opline->result;
+				MAKE_NOP(assign_opline);
 			}
 			ZEND_FALLTHROUGH;
 		case ZEND_ADD:
