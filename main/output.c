@@ -27,6 +27,7 @@
 #include "ext/standard/url_scanner_ex.h"
 #include "SAPI.h"
 #include "zend_stack.h"
+#include "zend_runtime_module.h"
 #include "php_output.h"
 
 PHPAPI ZEND_DECLARE_MODULE_GLOBALS(output)
@@ -486,6 +487,7 @@ PHPAPI php_output_handler *php_output_handler_create_user(zval *output_handler, 
 				handler = php_output_handler_init(handler_name, chunk_size, PHP_OUTPUT_HANDLER_ABILITY_FLAGS(flags) | PHP_OUTPUT_HANDLER_USER);
 				zend_fcc_addref(fcc);
 				handler->func.user_fcc = fcc;
+				handler->runtime_module = zend_get_current_runtime_module();
 			} else {
 				efree(fcc);
 				ZEND_ASSERT(error);
@@ -966,7 +968,13 @@ static inline php_output_handler_status_t php_output_handler_op(php_output_handl
 			/* ob_mode */
 			ZVAL_LONG(&ob_args[1], (zend_long) context->op);
 
-			zend_call_known_fcc_ex(handler->func.user_fcc, &retval, 2, ob_args, NULL, zend_fci_consumed_arg(0));
+			if (handler->func.user_fcc->function_handler->type == ZEND_INTERNAL_FUNCTION) {
+				zend_call_known_fcc_in_runtime_module_ex(
+					handler->func.user_fcc, handler->runtime_module,
+					&retval, 2, ob_args, NULL, zend_fci_consumed_arg(0));
+			} else {
+				zend_call_known_fcc_ex(handler->func.user_fcc, &retval, 2, ob_args, NULL, zend_fci_consumed_arg(0));
+			}
 
 			zval_ptr_dtor(&ob_args[0]);
 			zval_ptr_dtor(&ob_args[1]);

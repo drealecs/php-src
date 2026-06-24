@@ -213,6 +213,7 @@ void zend_optimizer_compact_literals(zend_op_array *op_array, zend_optimizer_ctx
 					break;
 				case ZEND_DECLARE_CLASS:
 				case ZEND_DECLARE_CLASS_DELAYED:
+				case ZEND_DECLARE_ANON_CLASS:
 					LITERAL_INFO(opline->op1.constant, 2);
 					if (opline->op2_type == IS_CONST) {
 						LITERAL_INFO(opline->op2.constant, 1);

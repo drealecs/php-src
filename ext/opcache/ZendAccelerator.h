@@ -347,14 +347,16 @@ void zend_accel_pending_ce_cache_commit(void);
 void zend_accel_pending_ce_cache_discard(void);
 
 const zend_op_array *zend_accel_pfa_cache_get(
-		const uint32_t *declaring_lineno_ptr, const zend_function *called_function, bool cacheable_in_shm);
+		const uint32_t *declaring_lineno_ptr, const zend_function *called_function, bool cacheable_in_shm,
+		zend_runtime_module *creating_runtime_module);
 
 /* Compiles ast into an op_array, and caches it. Takes ownership of ast. */
 zend_op_array *zend_accel_compile_pfa(zend_ast *ast,
 		zend_string *declaring_filename,
 		const uint32_t *declaring_lineno_ptr,
 		const zend_function *called_function,
-		zend_string *pfa_func_name, bool cacheable_in_shm);
+		zend_string *pfa_func_name, bool cacheable_in_shm,
+		zend_runtime_module *creating_runtime_module);
 
 END_EXTERN_C()
 

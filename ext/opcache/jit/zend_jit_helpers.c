@@ -18,6 +18,13 @@
 #include "Zend/zend_types.h"
 #include "Zend/zend_API.h"
 
+static const void *ZEND_FASTCALL zend_jit_runtime_module_fallback_handler(const zend_op *opline)
+{
+	zend_op vm_opline = *opline;
+	zend_vm_set_opcode_handler(&vm_opline);
+	return vm_opline.handler;
+}
+
 static ZEND_COLD void undef_result_after_exception(void) {
 	const zend_op *opline = EG(opline_before_exception);
 	ZEND_ASSERT(EG(exception));
@@ -53,7 +60,7 @@ static zend_never_inline zend_op_array* ZEND_FASTCALL zend_jit_init_func_run_tim
 
 static zend_function* ZEND_FASTCALL zend_jit_find_func_helper(zend_string *name, void **cache_slot)
 {
-	zval *func = zend_hash_find_known_hash(EG(function_table), name);
+	zval *func = zend_hash_find_known_hash(RMG(function_table), name);
 	zend_function *fbc;
 
 	if (UNEXPECTED(func == NULL)) {
@@ -63,25 +70,29 @@ static zend_function* ZEND_FASTCALL zend_jit_find_func_helper(zend_string *name,
 	if (EXPECTED(fbc->type == ZEND_USER_FUNCTION) && UNEXPECTED(!RUN_TIME_CACHE(&fbc->op_array))) {
 		fbc = _zend_jit_init_func_run_time_cache(&fbc->op_array);
 	}
-	*cache_slot = fbc;
+	if (!zend_runtime_context_is_module_sensitive(zend_get_current_runtime_context())) {
+		*cache_slot = fbc;
+	}
 	return fbc;
 }
 
 static uint32_t ZEND_FASTCALL zend_jit_jmp_frameless_helper(zval *func_name, void **cache_slot)
 {
-	zval *func = zend_hash_find_known_hash(EG(function_table), Z_STR_P(func_name));
+	zval *func = zend_hash_find_known_hash(RMG(function_table), Z_STR_P(func_name));
 	zend_jmp_fl_result result = (func == NULL) + 1;
-	*cache_slot = (void *)(uintptr_t)result;
+	if (!zend_runtime_context_is_module_sensitive(zend_get_current_runtime_context())) {
+		*cache_slot = (void *)(uintptr_t)result;
+	}
 	return result;
 }
 
 static zend_function* ZEND_FASTCALL zend_jit_find_ns_func_helper(zval *func_name, void **cache_slot)
 {
-	zval *func = zend_hash_find_known_hash(EG(function_table), Z_STR_P(func_name + 1));
+	zval *func = zend_hash_find_known_hash(RMG(function_table), Z_STR_P(func_name + 1));
 	zend_function *fbc;
 
 	if (func == NULL) {
-		func = zend_hash_find_known_hash(EG(function_table), Z_STR_P(func_name + 2));
+		func = zend_hash_find_known_hash(RMG(function_table), Z_STR_P(func_name + 2));
 		if (UNEXPECTED(func == NULL)) {
 			return NULL;
 		}
@@ -90,7 +101,9 @@ static zend_function* ZEND_FASTCALL zend_jit_find_ns_func_helper(zval *func_name
 	if (EXPECTED(fbc->type == ZEND_USER_FUNCTION) && UNEXPECTED(!RUN_TIME_CACHE(&fbc->op_array))) {
 		fbc = _zend_jit_init_func_run_time_cache(&fbc->op_array);
 	}
-	*cache_slot = fbc;
+	if (!zend_runtime_context_is_module_sensitive(zend_get_current_runtime_context())) {
+		*cache_slot = fbc;
+	}
 	return fbc;
 }
 
@@ -1977,7 +1990,8 @@ static bool ZEND_FASTCALL zend_jit_verify_arg_slow(zval *arg, zend_arg_info *arg
 	zend_execute_data *execute_data = EG(current_execute_data);
 	const zend_op *opline = EX(opline);
 	bool ret = zend_check_user_type_slow(
-		&arg_info->type, arg, /* ref */ NULL, /* current_frame */ false);
+		&arg_info->type, arg, /* ref */ NULL, /* current_frame */ false,
+		EX(func)->common.runtime_module, EX(func)->common.scope);
 	if (UNEXPECTED(!ret)) {
 		zend_verify_arg_error(EX(func), arg_info, opline->op1.num, arg);
 		return false;
@@ -1994,7 +2008,8 @@ static void ZEND_FASTCALL zend_jit_verify_return_slow(zval *arg, const zend_op_a
 		}
 	}
 	if (UNEXPECTED(!zend_check_user_type_slow(
-			&arg_info->type, arg, /* ref */ NULL, /* current_frame */ true))) {
+			&arg_info->type, arg, /* ref */ NULL, /* current_frame */ true,
+			op_array->runtime_module, op_array->scope))) {
 		zend_verify_return_error((zend_function*)op_array, arg);
 	}
 }

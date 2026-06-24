@@ -1544,6 +1544,9 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 		}
 
 		zend_jit_bb_start(&ctx, b);
+		if (ssa->cfg.blocks[b].flags & ZEND_BB_START) {
+			zend_jit_check_runtime_module(&ctx, op_array->opcodes + ssa->cfg.blocks[b].start);
+		}
 
 		if ((JIT_G(opt_flags) & ZEND_JIT_REG_ALLOC_GLOBAL) && ctx.ra) {
 			zend_ssa_phi *phi = ssa->blocks[b].phis;
@@ -3366,6 +3369,9 @@ int zend_jit_op_array(zend_op_array *op_array, zend_script *script)
 	if (dasm_ptr == NULL) {
 		return FAILURE;
 	}
+	if (op_array->runtime_module) {
+		return SUCCESS;
+	}
 
 	if (JIT_G(trigger) == ZEND_JIT_ON_FIRST_EXEC) {
 		zend_jit_op_array_extension *jit_extension;
@@ -3512,7 +3518,7 @@ int zend_jit_script(zend_script *script)
 
 		for (i = 0; i < call_graph.op_arrays_count; i++) {
 			info = ZEND_FUNC_INFO(call_graph.op_arrays[i]);
-			if (info) {
+			if (info && !call_graph.op_arrays[i]->runtime_module) {
 				if (JIT_G(debug) & ZEND_JIT_DEBUG_SSA) {
 					zend_dump_op_array(call_graph.op_arrays[i], ZEND_DUMP_HIDE_UNREACHABLE|ZEND_DUMP_RC_INFERENCE|ZEND_DUMP_SSA, "JIT", &info->ssa);
 				}

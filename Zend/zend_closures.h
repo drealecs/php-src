@@ -21,6 +21,8 @@
 
 #include "zend_types.h"
 
+typedef struct _zend_runtime_module zend_runtime_module;
+
 BEGIN_EXTERN_C()
 
 /* This macro depends on zend_closure structure layout */
@@ -35,6 +37,7 @@ void zend_closure_from_frame(zval *closure_zv, const zend_execute_data *frame);
 extern ZEND_API zend_class_entry *zend_ce_closure;
 
 ZEND_API void zend_create_closure(zval *res, zend_function *op_array, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr);
+ZEND_API void zend_create_closure_in_runtime_module(zval *res, zend_function *op_array, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr, zend_runtime_module *runtime_module);
 ZEND_API void zend_create_fake_closure(zval *res, zend_function *op_array, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr);
 ZEND_API void zend_create_partial_closure(zval *res, zend_function *func, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr, bool partial_of_closure);
 ZEND_API zend_function *zend_get_closure_invoke_method(zend_object *obj);

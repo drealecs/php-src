@@ -118,6 +118,7 @@ typedef struct _php_output_handler {
 	int level;
 	size_t size;
 	php_output_buffer buffer;
+	zend_runtime_module *runtime_module;
 
 	void *opaq;
 	void (*dtor)(void *opaq);

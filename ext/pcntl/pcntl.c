@@ -29,6 +29,7 @@
 #include "ext/standard/info.h"
 #include "ext/standard/php_filestat.h"
 #include "php_signal.h"
+#include "zend_runtime_module.h"
 #include "php_ticks.h"
 #include "zend_exceptions.h"
 #include "zend_fibers.h"
@@ -204,6 +205,7 @@ PHP_RINIT_FUNCTION(pcntl)
 {
 	php_add_tick_function(pcntl_signal_dispatch_tick_function, NULL);
 	zend_hash_init(&PCNTL_G(php_signal_table), 16, NULL, ZVAL_PTR_DTOR, 0);
+	zend_hash_init(&PCNTL_G(php_signal_runtime_modules), 16, NULL, NULL, 0);
 	PCNTL_G(head) = PCNTL_G(tail) = PCNTL_G(spares) = NULL;
 	PCNTL_G(async_signals) = 0;
 	PCNTL_G(last_error) = 0;
@@ -242,6 +244,7 @@ PHP_RSHUTDOWN_FUNCTION(pcntl)
 	} ZEND_HASH_FOREACH_END();
 
 	zend_hash_destroy(&PCNTL_G(php_signal_table));
+	zend_hash_destroy(&PCNTL_G(php_signal_runtime_modules));
 
 	while (PCNTL_G(head)) {
 		sig = PCNTL_G(head);
@@ -838,6 +841,7 @@ PHP_FUNCTION(pcntl_signal)
 			php_error_docref(NULL, E_WARNING, "Error assigning signal");
 			RETURN_FALSE;
 		}
+		zend_hash_index_del(&PCNTL_G(php_signal_runtime_modules), signo);
 		zend_hash_index_update(&PCNTL_G(php_signal_table), signo, handle);
 		RETURN_TRUE;
 	}
@@ -857,6 +861,13 @@ PHP_FUNCTION(pcntl_signal)
 	}
 
 	/* Add the function name to our signal table */
+	zend_runtime_module *module = zend_get_current_runtime_module();
+	if (module) {
+		zend_hash_index_update_ptr(&PCNTL_G(php_signal_runtime_modules), signo, module);
+	} else {
+		/* An absent entry denotes an explicit root registration. */
+		zend_hash_index_del(&PCNTL_G(php_signal_runtime_modules), signo);
+	}
 	handle = zend_hash_index_update(&PCNTL_G(php_signal_table), signo, handle);
 	Z_TRY_ADDREF_P(handle);
 	RETURN_TRUE;
@@ -1350,6 +1361,36 @@ static void pcntl_signal_handler(int signo, siginfo_t *siginfo, void *context)
 	}
 }
 
+static void pcntl_call_signal_handler(zval *handle, zend_runtime_module *module, zval *retval, zval *params)
+{
+	zend_fcall_info fci;
+	zend_fcall_info_cache fcc;
+	char *error = NULL;
+
+	ZVAL_UNDEF(retval);
+	if (zend_fcall_info_init_in_runtime_module(handle, module, 0, &fci, &fcc, NULL, &error) == FAILURE) {
+		if (!EG(exception)) {
+			zend_string *name = zend_get_callable_name(handle);
+			zend_throw_error(NULL, "Invalid callback %s, %s",
+				ZSTR_VAL(name), error ? error : "callback is not callable");
+			zend_string_release(name);
+		}
+		if (error) {
+			efree(error);
+		}
+		return;
+	}
+	fci.retval = retval;
+	fci.param_count = 2;
+	fci.params = params;
+	if (fcc.function_handler->type == ZEND_INTERNAL_FUNCTION) {
+		zend_call_function_in_runtime_module(&fci, &fcc, module);
+	} else {
+		zend_call_function(&fci, &fcc);
+	}
+	zend_release_fcall_info_cache(&fcc);
+}
+
 void pcntl_signal_dispatch(void)
 {
 	zval params[2], *handle, retval;
@@ -1409,7 +1450,9 @@ void pcntl_signal_dispatch(void)
 				pcntl_siginfo_to_zval(queue->signo, &queue->siginfo, &params[1]);
 
 				/* Call php signal handler - Note that we do not report errors, and we ignore the return value */
-				call_user_function(NULL, NULL, handle, &retval, 2, params);
+				zend_runtime_module *module = zend_hash_index_find_ptr(
+					&PCNTL_G(php_signal_runtime_modules), queue->signo);
+				pcntl_call_signal_handler(handle, module, &retval, params);
 				zval_ptr_dtor(&retval);
 				zval_ptr_dtor(&params[1]);
 

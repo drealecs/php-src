@@ -22,6 +22,7 @@
 #include "Zend/zend_types.h"
 #include "Zend/zend_compile.h"
 #include "Zend/zend_constants.h"
+#include "Zend/zend_runtime_module.h"
 #include "Zend/Optimizer/zend_func_info.h"
 #include "Zend/Optimizer/zend_call_graph.h"
 #include "zend_vm_opcodes.h"
@@ -253,6 +254,12 @@ zend_constant* ZEND_FASTCALL zend_jit_get_constant(const zval *key, uint32_t fla
 zend_constant* ZEND_FASTCALL zend_jit_check_constant(const zval *key);
 
 /* Tracer */
+static zend_always_inline bool zend_jit_trace_is_runtime_module_sensitive(zend_execute_data *execute_data)
+{
+	return zend_runtime_context_is_module_sensitive(
+		zend_runtime_module_context(execute_data->runtime_module));
+}
+
 #define zend_jit_opline_hash(opline) \
 	zend_jit_hash(opline)
 
