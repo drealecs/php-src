@@ -32,6 +32,7 @@
 #include "zend_hash.h"
 #include "zend_property_hooks.h"
 #include "zend_observer.h"
+#include "zend_runtime_module.h"
 
 #define DEBUG_OBJECT_HANDLERS 0
 
@@ -1832,6 +1833,9 @@ ZEND_API ZEND_ATTRIBUTE_NONNULL zend_function *zend_get_call_trampoline_func(
 	func->filename = (fbc->type == ZEND_USER_FUNCTION)? fbc->op_array.filename : ZSTR_EMPTY_ALLOC();
 	func->line_start = (fbc->type == ZEND_USER_FUNCTION)? fbc->op_array.line_start : 0;
 	func->line_end = (fbc->type == ZEND_USER_FUNCTION)? fbc->op_array.line_end : 0;
+	func->runtime_module = fbc->type == ZEND_USER_FUNCTION
+		? fbc->common.runtime_module
+		: zend_get_current_runtime_module();
 
 	//??? keep compatibility for "\0" characters
 	//??? see: Zend/tests/bug46238.phpt

@@ -22,6 +22,7 @@
 #include "SAPI.h"
 #include "php_variables.h"
 #include "php_ini.h"
+#include "Zend/zend_runtime_module.h"
 #ifdef ZTS
 #include "TSRM.h"
 #endif
@@ -117,6 +118,7 @@ PHP_FUNCTION(header_register_callback)
 
 	if (ZEND_FCC_INITIALIZED(SG(send_header_fcc))) {
 		zend_fcc_dtor(&SG(send_header_fcc));
+		SG(callback_runtime_module) = NULL;
 	}
 
 	/* Don't store callback if headers have already been sent:
@@ -125,6 +127,7 @@ PHP_FUNCTION(header_register_callback)
 		zend_release_fcall_info_cache(&fcc);
 	} else {
 		zend_fcc_dup(&SG(send_header_fcc), &fcc);
+		SG(callback_runtime_module) = zend_get_current_runtime_module();
 	}
 	RETURN_TRUE;
 }
@@ -409,6 +412,7 @@ SAPI_API void sapi_activate(void)
 	SG(sapi_headers).http_status_line = NULL;
 	SG(sapi_headers).mimetype = NULL;
 	SG(headers_sent) = false;
+	SG(callback_runtime_module) = NULL;
 	SG(read_post_bytes) = 0;
 	SG(request_info).request_body = NULL;
 	SG(request_info).current_user = NULL;
@@ -865,9 +869,15 @@ SAPI_API zend_result sapi_send_headers(void)
 
 	if (ZEND_FCC_INITIALIZED(SG(send_header_fcc))) {
 		zend_fcall_info_cache fcc = SG(send_header_fcc);
+		zend_runtime_module *runtime_module = SG(callback_runtime_module);
 		/* Prevent triggering the callback multiple times */
 		SG(send_header_fcc) = empty_fcall_info_cache;
-		zend_call_known_fcc(&fcc, NULL, 0, NULL, NULL);
+		SG(callback_runtime_module) = NULL;
+		if (fcc.function_handler->type == ZEND_INTERNAL_FUNCTION) {
+			zend_call_known_fcc_in_runtime_module(&fcc, runtime_module, NULL, 0, NULL, NULL);
+		} else {
+			zend_call_known_fcc(&fcc, NULL, 0, NULL, NULL);
+		}
 		zend_fcc_dtor(&fcc);
 	}
 

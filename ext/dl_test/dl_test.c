@@ -102,7 +102,8 @@ PHP_MINIT_FUNCTION(dl_test)
 {
 	zend_class_entry *ce;
 
-	register_class_DlTest();
+	ce = register_class_DlTest();
+	zend_register_class_alias("DlTestAlias", ce);
 	ce = register_class_DlTestSuperClass();
 	register_class_DlTestSubClass(ce);
 	register_class_DlTestAliasedClass();

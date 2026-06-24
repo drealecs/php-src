@@ -34,6 +34,7 @@
 #include "zend_enum.h"
 #include "zend_object_handlers.h"
 #include "zend_observer.h"
+#include "zend_runtime_module.h"
 
 #include <stdarg.h>
 
@@ -1497,7 +1498,8 @@ static zend_result update_property(zval *val, const zend_property_info *prop_inf
 		zval tmp;
 
 		ZVAL_COPY(&tmp, val);
-		if (UNEXPECTED(zval_update_constant_ex(&tmp, prop_info->ce) != SUCCESS)) {
+		if (UNEXPECTED(zval_update_constant_ex_in_runtime_module(
+				&tmp, prop_info->ce, prop_info->runtime_module) != SUCCESS)) {
 			zval_ptr_dtor(&tmp);
 			return FAILURE;
 		}
@@ -1510,7 +1512,8 @@ static zend_result update_property(zval *val, const zend_property_info *prop_inf
 		ZVAL_COPY_VALUE(val, &tmp);
 		return SUCCESS;
 	}
-	return zval_update_constant_ex(val, prop_info->ce);
+	return zval_update_constant_ex_in_runtime_module(
+		val, prop_info->ce, prop_info->runtime_module);
 }
 
 ZEND_API zend_result zend_update_class_constant(zend_class_constant *c, const zend_string *name, zend_class_entry *scope)
@@ -1518,13 +1521,15 @@ ZEND_API zend_result zend_update_class_constant(zend_class_constant *c, const ze
 	ZEND_ASSERT(Z_TYPE(c->value) == IS_CONSTANT_AST);
 
 	if (EXPECTED(!ZEND_TYPE_IS_SET(c->type) || ZEND_TYPE_PURE_MASK(c->type) == MAY_BE_ANY)) {
-		return zval_update_constant_ex(&c->value, scope);
+		return zval_update_constant_ex_in_runtime_module(
+			&c->value, scope, c->runtime_module);
 	}
 
 	zval tmp;
 
 	ZVAL_COPY(&tmp, &c->value);
-	zend_result result = zval_update_constant_ex(&tmp, scope);
+	zend_result result = zval_update_constant_ex_in_runtime_module(
+		&tmp, scope, c->runtime_module);
 	if (result == FAILURE) {
 		zval_ptr_dtor(&tmp);
 		return FAILURE;
@@ -3077,6 +3082,7 @@ ZEND_API zend_result zend_register_functions(zend_class_entry *scope, const zend
 		internal_function->doc_comment = ptr->doc_comment ? zend_string_init_interned(ptr->doc_comment, strlen(ptr->doc_comment), 1) : NULL;
 		internal_function->function_name = zend_string_init_interned(ptr->fname, fname_len, 1);
 		internal_function->scope = scope;
+		internal_function->runtime_module = NULL;
 		internal_function->prototype = NULL;
 		internal_function->prop_info = NULL;
 		internal_function->attributes = NULL;
@@ -3181,11 +3187,25 @@ ZEND_API zend_result zend_register_functions(zend_class_entry *scope, const zend
 		lowercase_name = zend_new_interned_string(lowercase_name);
 		reg_function = pemalloc(sizeof(zend_internal_function), true);
 		memcpy(reg_function, &function, sizeof(zend_internal_function));
+		if (!scope && target_function_table == CG(function_table)
+				&& zend_runtime_module_has_user_symbol(
+					ZEND_RUNTIME_MODULE_SYMBOL_FUNCTION, lowercase_name)
+				&& !zend_hash_exists(target_function_table, lowercase_name)) {
+			zend_error(error_type, "Function registration failed - duplicate name - %s", ptr->fname);
+			unload = 1;
+			free(reg_function);
+			zend_string_release(lowercase_name);
+			break;
+		}
 		if (zend_hash_add_ptr(target_function_table, lowercase_name, reg_function) == NULL) {
 			unload=1;
 			free(reg_function);
 			zend_string_release(lowercase_name);
 			break;
+		}
+		if (!scope && target_function_table == CG(function_table)) {
+			zend_runtime_context_add_visible_internal_function(
+				lowercase_name, (zend_function *) reg_function);
 		}
 		if (reg_function->frameless_function_infos) {
 			const zend_frameless_function_info *flf_info = reg_function->frameless_function_infos;
@@ -3293,12 +3313,18 @@ ZEND_API void zend_unregister_functions(const zend_function_entry *functions, in
 		target_function_table = CG(function_table);
 	}
 	while (ptr->fname) {
+		zend_function *function;
+
 		if (count!=-1 && i>=count) {
 			break;
 		}
 		fname_len = strlen(ptr->fname);
 		lowercase_name = zend_string_alloc(fname_len, 0);
 		zend_str_tolower_copy(ZSTR_VAL(lowercase_name), ptr->fname, fname_len);
+		function = zend_hash_find_ptr(target_function_table, lowercase_name);
+		if (target_function_table == CG(function_table) && function) {
+			zend_runtime_context_remove_visible_internal_function(lowercase_name, function);
+		}
 		zend_hash_del(target_function_table, lowercase_name);
 		zend_string_efree(lowercase_name);
 		ptr++;
@@ -3332,6 +3358,13 @@ static void clean_module_classes(int module_number) /* {{{ */
 	ZEND_HASH_REVERSE_FOREACH_BUCKET(EG(class_table), bucket) {
 		const zend_class_entry *ce = Z_CE(bucket->val);
 		if (ce->type == ZEND_INTERNAL_CLASS && ce->info.internal.module->module_number == module_number) {
+			if (bucket->key) {
+				zend_runtime_context_remove_visible_internal_class(bucket->key, (zend_class_entry *) ce);
+			}
+			if (EG(runtime_module_root_context)
+					&& Z_TYPE(bucket->val) == IS_ALIAS_PTR && bucket->key) {
+				zend_hash_del(&EG(runtime_module_internal_aliases), bucket->key);
+			}
 			zend_hash_del_bucket(EG(class_table), bucket);
 		}
 	} ZEND_HASH_FOREACH_END();
@@ -3339,21 +3372,20 @@ static void clean_module_classes(int module_number) /* {{{ */
 }
 /* }}} */
 
-static int clean_module_function(zval *el, void *arg) /* {{{ */
-{
-	const zend_function *fe = (zend_function *) Z_PTR_P(el);
-	const zend_module_entry *module = arg;
-	if (fe->common.type == ZEND_INTERNAL_FUNCTION && fe->internal_function.module == module) {
-		return ZEND_HASH_APPLY_REMOVE;
-	} else {
-		return ZEND_HASH_APPLY_KEEP;
-	}
-}
-/* }}} */
-
 static void clean_module_functions(zend_module_entry *module) /* {{{ */
 {
-	zend_hash_apply_with_argument(CG(function_table), clean_module_function, module);
+	Bucket *bucket;
+
+	ZEND_HASH_REVERSE_FOREACH_BUCKET(CG(function_table), bucket) {
+		zend_function *function = Z_PTR(bucket->val);
+		if (function->common.type == ZEND_INTERNAL_FUNCTION
+				&& function->internal_function.module == module) {
+			if (bucket->key) {
+				zend_runtime_context_remove_visible_internal_function(bucket->key, function);
+			}
+			zend_hash_del_bucket(CG(function_table), bucket);
+		}
+	} ZEND_HASH_FOREACH_END();
 }
 /* }}} */
 
@@ -3402,9 +3434,7 @@ void module_destructor(zend_module_entry *module) /* {{{ */
 	}
 
 	module->module_started=0;
-	if (module->type == MODULE_TEMPORARY && module->functions) {
-		zend_unregister_functions(module->functions, -1, NULL);
-		/* Clean functions registered separately from module->functions */
+	if (module->type == MODULE_TEMPORARY) {
 		clean_module_functions(module);
 	}
 
@@ -3526,8 +3556,18 @@ ZEND_API int zend_next_free_module(void) /* {{{ */
 
 static zend_class_entry *do_register_internal_class(const zend_class_entry *orig_class_entry, uint32_t ce_flags) /* {{{ */
 {
-	zend_class_entry *class_entry = pemalloc(sizeof(zend_class_entry), true);
+	zend_class_entry *class_entry;
+	zend_class_entry *old_class_entry;
 	zend_string *lowercase_name;
+
+	lowercase_name = zend_string_tolower_ex(orig_class_entry->name, EG(current_module)->type == MODULE_PERSISTENT);
+	lowercase_name = zend_new_interned_string(lowercase_name);
+	if (zend_runtime_module_has_user_symbol(ZEND_RUNTIME_MODULE_SYMBOL_CLASS, lowercase_name)) {
+		zend_error_noreturn(E_ERROR, "Cannot register class %s, because the name is already in use",
+			ZSTR_VAL(orig_class_entry->name));
+	}
+
+	class_entry = pemalloc(sizeof(zend_class_entry), true);
 	*class_entry = *orig_class_entry;
 
 	class_entry->type = ZEND_INTERNAL_CLASS;
@@ -3540,9 +3580,12 @@ static zend_class_entry *do_register_internal_class(const zend_class_entry *orig
 		zend_register_functions(class_entry, class_entry->info.internal.builtin_functions, &class_entry->function_table, EG(current_module)->type);
 	}
 
-	lowercase_name = zend_string_tolower_ex(orig_class_entry->name, EG(current_module)->type == MODULE_PERSISTENT);
-	lowercase_name = zend_new_interned_string(lowercase_name);
+	old_class_entry = zend_hash_find_ptr(CG(class_table), lowercase_name);
+	if (old_class_entry) {
+		zend_runtime_context_remove_visible_internal_class(lowercase_name, old_class_entry);
+	}
 	zend_hash_update_ptr(CG(class_table), lowercase_name, class_entry);
+	zend_runtime_context_add_visible_internal_class(lowercase_name, class_entry);
 	zend_string_release_ex(lowercase_name, 1);
 
 	if (class_entry->__tostring && !zend_string_equals_literal(class_entry->name, "Stringable")
@@ -3619,6 +3662,9 @@ ZEND_API zend_class_entry *zend_register_internal_interface(const zend_class_ent
 
 ZEND_API zend_result zend_register_class_alias_ex(const char *name, size_t name_len, zend_class_entry *ce, bool persistent) /* {{{ */
 {
+	bool internal_alias = persistent;
+	zend_runtime_module *runtime_module = NULL;
+	zend_runtime_module_symbol_conflict conflict;
 	zend_string *lcname;
 	zval zv, *ret;
 
@@ -3645,15 +3691,57 @@ ZEND_API zend_result zend_register_class_alias_ex(const char *name, size_t name_
 	 */
 	ZVAL_ALIAS_PTR(&zv, ce);
 
-	ret = zend_hash_add(CG(class_table), lcname, &zv);
-	zend_string_release_ex(lcname, 0);
+	if (!internal_alias) {
+		runtime_module = zend_get_current_runtime_module();
+	}
+	if (!internal_alias && zend_runtime_module_check_symbol_declaration(runtime_module,
+				ZEND_RUNTIME_MODULE_SYMBOL_CLASS, lcname, &conflict)) {
+		if (runtime_module) {
+			if (conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_INTERNAL) {
+				zend_throw_error(NULL,
+					"Cannot declare class alias %s in runtime module \"%s\": name conflicts with an internal/builtin symbol",
+					ZSTR_VAL(lcname), ZSTR_VAL(runtime_module->name));
+			} else if (conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_ROOT) {
+				zend_throw_error(NULL,
+					"Cannot declare class alias %s in runtime module \"%s\": name conflicts with the root context",
+					ZSTR_VAL(lcname), ZSTR_VAL(runtime_module->name));
+			} else {
+				zend_throw_error(NULL,
+					"Cannot declare class alias %s in runtime module \"%s\": name conflicts with runtime module \"%s\"",
+					ZSTR_VAL(lcname), ZSTR_VAL(runtime_module->name), ZSTR_VAL(conflict.module->name));
+			}
+		} else {
+			ZEND_ASSERT(conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_MODULE);
+			zend_throw_error(NULL,
+				"Cannot declare class alias %s: name conflicts with runtime module \"%s\"",
+				ZSTR_VAL(lcname), ZSTR_VAL(conflict.module->name));
+		}
+		zend_string_release_ex(lcname, 0);
+		return FAILURE;
+	}
+	if (internal_alias && zend_runtime_module_has_user_symbol(
+			ZEND_RUNTIME_MODULE_SYMBOL_CLASS, lcname)) {
+		zend_error(E_WARNING, "Cannot register class alias %s, because the name is already in use",
+			ZSTR_VAL(lcname));
+		zend_string_release_ex(lcname, 0);
+		return FAILURE;
+	}
+	ret = zend_hash_add(internal_alias ? CG(class_table) : RMG(declared_class_table), lcname, &zv);
 	if (ret) {
+		if (internal_alias) {
+			zend_runtime_module_register_internal_class_alias(lcname, persistent);
+			zend_runtime_context_add_visible_internal_class(lcname, ce);
+		} else {
+			zend_runtime_module_add_visible_class(runtime_module, lcname, ce);
+		}
+		zend_string_release_ex(lcname, 0);
 		// avoid notifying at MINIT time
 		if (ce->type == ZEND_USER_CLASS) {
 			zend_observer_class_linked_notify(ce, lcname);
 		}
 		return SUCCESS;
 	}
+	zend_string_release_ex(lcname, 0);
 	return FAILURE;
 }
 /* }}} */
@@ -3779,7 +3867,8 @@ static bool zend_is_callable_check_class(zend_string *name, zend_class_entry *sc
 			*strict_class = true;
 			ret = true;
 		}
-	} else if ((ce = zend_lookup_class(name)) != NULL) {
+	} else if ((ce = zend_lookup_class_ex_in_runtime_module(
+			frame ? frame->runtime_module : NULL, name, NULL, 0)) != NULL) {
 		const zend_class_entry *frame_scope = get_scope(frame);
 		fcc->calling_scope = ce;
 		if (frame_scope && !fcc->object) {
@@ -3859,7 +3948,8 @@ static zend_always_inline bool zend_is_method_callable(zend_string *callable, co
 		}
 
 		zend_string *class_name = zend_string_init_interned(ZSTR_VAL(callable), class_name_len, 0);
-		if (ZSTR_HAS_CE_CACHE(class_name) && ZSTR_GET_CE_CACHE(class_name)) {
+		if ((!frame || !frame->runtime_module)
+				&& ZSTR_HAS_CE_CACHE(class_name) && ZSTR_GET_CE_CACHE(class_name)) {
 			fcc->calling_scope = ZSTR_GET_CE_CACHE(class_name);
 			if (scope && !fcc->object) {
 				zend_object *object = zend_get_this_object(frame);
@@ -4167,7 +4257,8 @@ again:
 					return true;
 				}
 
-				zend_function *func = zend_fetch_function(Z_STR_P(callable));
+				zend_function *func = zend_fetch_function_in_runtime_module(
+					frame ? frame->runtime_module : NULL, Z_STR_P(callable));
 				if (EXPECTED(func != NULL)) {
 					fcc->function_handler = func;
 					return true;
@@ -4261,10 +4352,21 @@ again:
 
 ZEND_API bool zend_is_callable_ex(const zval *callable, zend_object *object, uint32_t check_flags, zend_string **callable_name, zend_fcall_info_cache *fcc, char **error) /* {{{ */
 {
-	/* Determine callability at the first parent user frame. */
-	const zend_execute_data *frame = EG(current_execute_data);
+	/* Determine callability at the first parent user frame, while preserving
+	 * the runtime module inherited by the current internal frame. */
+	const zend_execute_data *current_frame = EG(current_execute_data);
+	const zend_execute_data *frame = current_frame;
+	zend_execute_data runtime_module_frame = {0};
 	while (frame && (!frame->func || !ZEND_USER_CODE(frame->func->type))) {
 		frame = frame->prev_execute_data;
+	}
+	if (current_frame && current_frame != frame) {
+		if (frame) {
+			runtime_module_frame = *frame;
+		}
+		runtime_module_frame.runtime_module = current_frame->runtime_module;
+		runtime_module_frame.has_explicit_runtime_module = true;
+		frame = &runtime_module_frame;
 	}
 
 	bool ret = zend_is_callable_at_frame(callable, object, frame, check_flags, fcc, error);
@@ -4274,9 +4376,56 @@ ZEND_API bool zend_is_callable_ex(const zval *callable, zend_object *object, uin
 	return ret;
 }
 
+ZEND_API bool zend_is_callable_in_runtime_module(
+		const zval *callable, zend_runtime_module *runtime_module, uint32_t check_flags,
+		zend_string **callable_name, zend_fcall_info_cache *fcc, char **error) /* {{{ */
+{
+	const zend_execute_data *frame = EG(current_execute_data);
+	zend_execute_data runtime_module_frame = {0};
+
+	while (frame && (!frame->func || !ZEND_USER_CODE(frame->func->type))) {
+		frame = frame->prev_execute_data;
+	}
+	if (frame) {
+		runtime_module_frame = *frame;
+	}
+	runtime_module_frame.runtime_module = runtime_module;
+	runtime_module_frame.has_explicit_runtime_module = true;
+
+	bool ret = zend_is_callable_at_frame(
+		callable, NULL, &runtime_module_frame, check_flags, fcc, error);
+	if (callable_name) {
+		*callable_name = zend_get_callable_name_ex(callable, NULL);
+	}
+	return ret;
+}
+
 ZEND_API zend_result zend_fcall_info_init(const zval *callable, uint32_t check_flags, zend_fcall_info *fci, zend_fcall_info_cache *fcc, zend_string **callable_name, char **error) /* {{{ */
 {
 	if (!zend_is_callable_ex(callable, NULL, check_flags, callable_name, fcc, error)) {
+		return FAILURE;
+	}
+
+	fci->size = sizeof(*fci);
+	fci->object = fcc->object;
+	ZVAL_COPY_VALUE(&fci->function_name, callable);
+	fci->retval = NULL;
+	fci->param_count = 0;
+	fci->params = NULL;
+	fci->named_params = NULL;
+	fci->consumed_args = 0;
+
+	return SUCCESS;
+}
+/* }}} */
+
+ZEND_API zend_result zend_fcall_info_init_in_runtime_module(
+		const zval *callable, zend_runtime_module *runtime_module, uint32_t check_flags,
+		zend_fcall_info *fci, zend_fcall_info_cache *fcc,
+		zend_string **callable_name, char **error) /* {{{ */
+{
+	if (!zend_is_callable_in_runtime_module(
+			callable, runtime_module, check_flags, callable_name, fcc, error)) {
 		return FAILURE;
 	}
 
@@ -4611,6 +4760,7 @@ skip_property_storage:
 	property_info->hooks = NULL;
 	property_info->ce = ce;
 	property_info->type = type;
+	property_info->runtime_module = ce->runtime_module;
 
 	if (is_persistent_class(ce)) {
 		zend_normalize_internal_type(&property_info->type);
@@ -4852,6 +5002,7 @@ ZEND_API zend_class_constant *zend_declare_typed_class_constant(zend_class_entry
 	c->attributes = NULL;
 	c->ce = ce;
 	c->type = type;
+	c->runtime_module = ce->runtime_module;
 
 	if (Z_TYPE_P(value) == IS_CONSTANT_AST) {
 		ce->ce_flags &= ~ZEND_ACC_CONSTANTS_UPDATED;

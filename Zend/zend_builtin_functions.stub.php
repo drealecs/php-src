@@ -7,6 +7,10 @@ class stdClass
 {
 }
 
+function module_add_dependency(string $dependency): void {}
+
+function module_run(string $module, Closure $callback): mixed {}
+
 /** @refcount 1 */
 function clone(object $object, array $withProperties = []): object {}
 

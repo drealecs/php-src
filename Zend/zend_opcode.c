@@ -27,6 +27,7 @@
 #include "zend_sort.h"
 #include "zend_constants.h"
 #include "zend_observer.h"
+#include "zend_runtime_module.h"
 
 #include "zend_vm.h"
 
@@ -34,6 +35,14 @@ static void zend_extension_op_array_ctor_handler(zend_extension *extension, zend
 {
 	if (extension->op_array_ctor) {
 		extension->op_array_ctor(op_array);
+	}
+}
+
+ZEND_API void zend_init_op_array_extension_handles(zend_op_array *op_array)
+{
+	if (zend_extension_flags & ZEND_EXTENSIONS_HAVE_OP_ARRAY_CTOR) {
+		zend_llist_apply_with_argument(&zend_extensions,
+			(llist_apply_with_arg_func_t) zend_extension_op_array_ctor_handler, op_array);
 	}
 }
 
@@ -71,6 +80,7 @@ void init_op_array(zend_op_array *op_array, zend_function_type type, int initial
 	op_array->required_num_args = 0;
 
 	op_array->scope = NULL;
+	op_array->runtime_module = zend_get_current_runtime_module();
 	op_array->prototype = NULL;
 	op_array->prop_info = NULL;
 
@@ -96,9 +106,7 @@ void init_op_array(zend_op_array *op_array, zend_function_type type, int initial
 
 	memset(op_array->reserved, 0, ZEND_MAX_RESERVED_RESOURCES * sizeof(void*));
 
-	if (zend_extension_flags & ZEND_EXTENSIONS_HAVE_OP_ARRAY_CTOR) {
-		zend_llist_apply_with_argument(&zend_extensions, (llist_apply_with_arg_func_t) zend_extension_op_array_ctor_handler, op_array);
-	}
+	zend_init_op_array_extension_handles(op_array);
 }
 
 ZEND_API void destroy_zend_function(zend_function *function)

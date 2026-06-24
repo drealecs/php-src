@@ -278,7 +278,7 @@ static inline bool can_elide_list_type(
 		}
 		if (ZEND_TYPE_HAS_NAME(*single_type)) {
 			zend_string *lcname = zend_string_tolower(ZEND_TYPE_NAME(*single_type));
-			const zend_class_entry *ce = zend_optimizer_get_class_entry(script, op_array, lcname);
+			const zend_class_entry *ce = zend_optimizer_get_class_entry(script, NULL, lcname);
 			zend_string_release(lcname);
 			bool result = ce && safe_instanceof(use_info->ce, ce);
 			if (result == !is_intersection) {

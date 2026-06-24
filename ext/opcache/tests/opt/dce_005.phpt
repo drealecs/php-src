@@ -13,10 +13,10 @@ opcache
 <?php
 #[AllowDynamicProperties]
 class A {
-}
-function foo(int $x) {
-    $a = new A;
-    $a->foo = $x;
+    public static function foo(int $x) {
+        $a = new self;
+        $a->foo = $x;
+    }
 }
 ?>
 --EXPECTF--
@@ -26,7 +26,7 @@ $_main:
      ; %s
 0000 RETURN int(1)
 
-foo:
+A::foo:
      ; (lines=2, args=1, vars=1, tmps=0)
      ; (after optimizer)
      ; %s

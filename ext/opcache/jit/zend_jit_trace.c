@@ -4168,6 +4168,9 @@ static zend_vm_opcode_handler_t zend_jit_trace(zend_jit_trace_rec *trace_buffer,
 	name = zend_jit_trace_name(op_array, opline->lineno);
 	zend_jit_trace_start(&ctx, op_array, ssa, name, ZEND_JIT_TRACE_NUM,
 		parent_trace ? &zend_jit_traces[parent_trace] : NULL, exit_num);
+	if (!parent_trace) {
+		zend_jit_check_runtime_module(&ctx, opline);
+	}
 	ctx.trace = &zend_jit_traces[ZEND_JIT_TRACE_NUM];
 
 	/* Register allocation */
@@ -8158,6 +8161,9 @@ int ZEND_FASTCALL zend_jit_trace_hot_root(zend_execute_data *execute_data, const
 	size_t offset;
 	uint32_t trace_num;
 	zend_jit_trace_rec trace_buffer[ZEND_JIT_TRACE_MAX_LENGTH];
+	if (UNEXPECTED(zend_jit_trace_is_runtime_module_sensitive(execute_data))) {
+		return 0;
+	}
 
 	ZEND_ASSERT(EX(func)->type == ZEND_USER_FUNCTION);
 	ZEND_ASSERT(opline >= EX(func)->op_array.opcodes &&
@@ -8833,7 +8839,9 @@ int ZEND_FASTCALL zend_jit_trace_exit(uint32_t exit_num, zend_jit_registers_buf 
 		EX(opline) = opline;
 	}
 
-	if (zend_atomic_bool_load_ex(&EG(vm_interrupt)) || JIT_G(tracing)) {
+	if (UNEXPECTED(zend_jit_trace_is_runtime_module_sensitive(execute_data))) {
+		return 1;
+	} else if (zend_atomic_bool_load_ex(&EG(vm_interrupt)) || JIT_G(tracing)) {
 		return 1;
 	/* Lock-free check if the side trace was already JIT-ed or blacklist-ed in another process */
 	} else if (t->exit_info[exit_num].flags & (ZEND_JIT_EXIT_JITED|ZEND_JIT_EXIT_BLACKLISTED)) {

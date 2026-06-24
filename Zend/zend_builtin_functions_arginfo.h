@@ -1,7 +1,16 @@
 /* This is a generated file, edit zend_builtin_functions.stub.php instead.
- * Stub hash: 5d7145b7bc305bb50b45e75c02740206148223b1 */
+ * Stub hash: d784fe24b63109beefc3da09845abf130d4eaecb */
 
 #include "zend_attributes.h"
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_module_add_dependency, 0, 1, IS_VOID, 0)
+	ZEND_ARG_TYPE_INFO(0, dependency, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_module_run, 0, 2, IS_MIXED, 0)
+	ZEND_ARG_TYPE_INFO(0, module, IS_STRING, 0)
+	ZEND_ARG_OBJ_INFO(0, callback, Closure, 0)
+ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_clone, 0, 1, IS_OBJECT, 0)
 	ZEND_ARG_TYPE_INFO(0, object, IS_OBJECT, 0)
@@ -250,6 +259,8 @@ static const zend_frameless_function_info frameless_function_infos_class_exists[
 	{ 0 },
 };
 
+ZEND_FUNCTION(module_add_dependency);
+ZEND_FUNCTION(module_run);
 ZEND_FUNCTION(clone);
 ZEND_FUNCTION(exit);
 ZEND_FUNCTION(zend_version);
@@ -314,6 +325,8 @@ ZEND_FUNCTION(gc_disable);
 ZEND_FUNCTION(gc_status);
 
 static const zend_function_entry ext_functions[] = {
+	ZEND_FE(module_add_dependency, arginfo_module_add_dependency)
+	ZEND_FE(module_run, arginfo_module_run)
 	ZEND_FE(clone, arginfo_clone)
 	ZEND_FE(exit, arginfo_exit)
 	ZEND_RAW_FENTRY("die", zif_exit, arginfo_die, 0, NULL, NULL)

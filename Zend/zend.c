@@ -39,6 +39,7 @@
 #include "zend_hrtime.h"
 #include "zend_enum.h"
 #include "zend_closures.h"
+#include "zend_runtime_module.h"
 #include "Optimizer/zend_optimizer.h"
 #include "php.h"
 #include "php_globals.h"
@@ -804,6 +805,7 @@ static void compiler_globals_dtor(zend_compiler_globals *compiler_globals) /* {{
 
 static void executor_globals_ctor(zend_executor_globals *executor_globals) /* {{{ */
 {
+	executor_globals->runtime_module_root_context = NULL;
 	zend_startup_constants();
 	zend_copy_constants(executor_globals->zend_constants, GLOBAL_CONSTANTS_TABLE);
 	zend_init_rsrc_plist();
@@ -814,6 +816,8 @@ static void executor_globals_ctor(zend_executor_globals *executor_globals) /* {{
 	executor_globals->user_error_handler_error_reporting = 0;
 	ZVAL_UNDEF(&executor_globals->user_error_handler);
 	ZVAL_UNDEF(&executor_globals->user_exception_handler);
+	executor_globals->user_error_handler_runtime_module = NULL;
+	executor_globals->user_exception_handler_runtime_module = NULL;
 	ZVAL_UNDEF(&executor_globals->last_fatal_error_backtrace);
 	executor_globals->current_execute_data = NULL;
 	executor_globals->current_module = NULL;
@@ -1176,6 +1180,7 @@ void zend_shutdown(void) /* {{{ */
 	ts_apply_for_id(executor_globals_id, executor_globals_persistent_list_dtor);
 #endif
 	zend_destroy_modules();
+	zend_runtime_modules_global_shutdown();
 
 	virtual_cwd_deactivate();
 	virtual_cwd_shutdown();
@@ -1438,12 +1443,49 @@ ZEND_API zval *zend_get_configuration_directive(zend_string *name) /* {{{ */
 		} \
 	} while (0)
 
+static zend_result zend_call_user_handler_in_runtime_module(
+		zval *handler, zend_runtime_module *runtime_module,
+		zval *retval, uint32_t param_count, zval params[])
+{
+	zend_fcall_info fci;
+	zend_fcall_info_cache fcc;
+	char *error = NULL;
+
+	ZVAL_UNDEF(retval);
+	if (!EG(active)) {
+		return FAILURE;
+	}
+	if (zend_fcall_info_init_in_runtime_module(
+			handler, runtime_module, 0, &fci, &fcc, NULL, &error) == FAILURE) {
+		if (!EG(exception)) {
+			zend_string *callable_name = zend_get_callable_name(handler);
+			zend_throw_error(NULL, "Invalid callback %s, %s",
+				ZSTR_VAL(callable_name), error ? error : "callback is not callable");
+			zend_string_release(callable_name);
+		}
+		if (error) {
+			efree(error);
+		}
+		return SUCCESS;
+	}
+
+	fci.retval = retval;
+	fci.param_count = param_count;
+	fci.params = params;
+	zend_result result = fcc.function_handler->type == ZEND_INTERNAL_FUNCTION
+		? zend_call_function_in_runtime_module(&fci, &fcc, runtime_module)
+		: zend_call_function(&fci, &fcc);
+	zend_release_fcall_info_cache(&fcc);
+	return result;
+}
+
 ZEND_API ZEND_COLD void zend_error_zstr_at(
 		int orig_type, zend_string *error_filename, uint32_t error_lineno, zend_string *message)
 {
 	zval params[4];
 	zval retval;
 	zval orig_user_error_handler;
+	zend_runtime_module *orig_user_error_handler_runtime_module;
 	bool in_compilation;
 	zend_class_entry *saved_class_entry = NULL;
 	zend_stack loop_var_stack;
@@ -1561,6 +1603,8 @@ ZEND_API ZEND_COLD void zend_error_zstr_at(
 
 			ZVAL_COPY_VALUE(&orig_user_error_handler, &EG(user_error_handler));
 			ZVAL_UNDEF(&EG(user_error_handler));
+			orig_user_error_handler_runtime_module = EG(user_error_handler_runtime_module);
+			EG(user_error_handler_runtime_module) = NULL;
 
 			/* User error handler may include() additional PHP files.
 			 * If an error was generated during compilation PHP will compile
@@ -1582,7 +1626,9 @@ ZEND_API ZEND_COLD void zend_error_zstr_at(
 			orig_errors_buf = EG(errors);
 			memset(&EG(errors), 0, sizeof(EG(errors)));
 
-			res = call_user_function(CG(function_table), NULL, &orig_user_error_handler, &retval, 4, params);
+			res = zend_call_user_handler_in_runtime_module(
+				&orig_user_error_handler, orig_user_error_handler_runtime_module,
+				&retval, 4, params);
 
 			EG(record_errors) = orig_record_errors;
 			EG(errors) = orig_errors_buf;
@@ -1611,6 +1657,7 @@ ZEND_API ZEND_COLD void zend_error_zstr_at(
 
 			if (Z_TYPE(EG(user_error_handler)) == IS_UNDEF) {
 				ZVAL_COPY_VALUE(&EG(user_error_handler), &orig_user_error_handler);
+				EG(user_error_handler_runtime_module) = orig_user_error_handler_runtime_module;
 			} else {
 				zval_ptr_dtor(&orig_user_error_handler);
 			}
@@ -1930,22 +1977,30 @@ ZEND_API ZEND_COLD void zend_output_debug_string(bool trigger_break, const char 
 ZEND_API ZEND_COLD void zend_user_exception_handler(void) /* {{{ */
 {
 	zval orig_user_exception_handler;
+	zend_runtime_module *orig_user_exception_handler_runtime_module;
+	zend_user_handler_stack_entry entry;
 	zval params[1], retval2;
 	zend_object *old_exception;
 
 	if (zend_is_unwind_exit(EG(exception))) {
 		return;
 	}
-
 	old_exception = EG(exception);
 	EG(exception) = NULL;
 	ZVAL_OBJ(&params[0], old_exception);
 
 	ZVAL_COPY_VALUE(&orig_user_exception_handler, &EG(user_exception_handler));
-	zend_stack_push(&EG(user_exception_handlers), &orig_user_exception_handler);
+	orig_user_exception_handler_runtime_module = EG(user_exception_handler_runtime_module);
+	ZVAL_COPY_VALUE(&entry.handler, &orig_user_exception_handler);
+	entry.runtime_module = orig_user_exception_handler_runtime_module;
+	entry.error_reporting = 0;
+	zend_stack_push(&EG(user_exception_handlers), &entry);
 	ZVAL_UNDEF(&EG(user_exception_handler));
+	EG(user_exception_handler_runtime_module) = NULL;
 
-	if (call_user_function(CG(function_table), NULL, &orig_user_exception_handler, &retval2, 1, params) == SUCCESS) {
+	if (zend_call_user_handler_in_runtime_module(
+			&orig_user_exception_handler, orig_user_exception_handler_runtime_module,
+			&retval2, 1, params) == SUCCESS) {
 		zval_ptr_dtor(&retval2);
 		if (EG(exception)) {
 			OBJ_RELEASE(EG(exception));
@@ -1957,10 +2012,12 @@ ZEND_API ZEND_COLD void zend_user_exception_handler(void) /* {{{ */
 	}
 
 	if (Z_TYPE(EG(user_exception_handler)) == IS_UNDEF) {
-		zval *tmp = zend_stack_top(&EG(user_exception_handlers));
+		zend_user_handler_stack_entry *tmp = zend_stack_top(&EG(user_exception_handlers));
 		if (tmp) {
-			ZVAL_COPY_VALUE(&EG(user_exception_handler), tmp);
+			entry = *tmp;
 			zend_stack_del_top(&EG(user_exception_handlers));
+			ZVAL_COPY_VALUE(&EG(user_exception_handler), &entry.handler);
+			EG(user_exception_handler_runtime_module) = entry.runtime_module;
 		}
 	}
 } /* }}} */
@@ -1969,7 +2026,7 @@ ZEND_API zend_result zend_execute_script(int type, zval *retval, zend_file_handl
 {
 	zend_op_array *op_array = zend_compile_file(file_handle, type);
 	if (file_handle->opened_path) {
-		zend_hash_add_empty_element(&EG(included_files), file_handle->opened_path);
+		zend_hash_add_empty_element(RMG(included_files), file_handle->opened_path);
 	}
 
 	zend_result ret = SUCCESS;

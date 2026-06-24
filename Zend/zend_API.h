@@ -421,6 +421,9 @@ static zend_always_inline zend_string *zend_get_callable_name(const zval *callab
 ZEND_API bool zend_is_callable_at_frame(
 		const zval *callable, zend_object *object, const zend_execute_data *frame,
 		uint32_t check_flags, zend_fcall_info_cache *fcc, char **error);
+ZEND_API bool zend_is_callable_in_runtime_module(
+		const zval *callable, zend_runtime_module *runtime_module, uint32_t check_flags,
+		zend_string **callable_name, zend_fcall_info_cache *fcc, char **error);
 ZEND_API bool zend_is_callable_ex(const zval *callable, zend_object *object, uint32_t check_flags, zend_string **callable_name, zend_fcall_info_cache *fcc, char **error);
 static zend_always_inline bool zend_is_callable(const zval *callable, uint32_t check_flags, zend_string **callable_name)
 {
@@ -720,6 +723,10 @@ ZEND_API zend_result _call_user_function_impl(zval *object, zval *function_name,
  * The callable_name argument may be NULL.
  */
 ZEND_API zend_result zend_fcall_info_init(const zval *callable, uint32_t check_flags, zend_fcall_info *fci, zend_fcall_info_cache *fcc, zend_string **callable_name, char **error);
+ZEND_API zend_result zend_fcall_info_init_in_runtime_module(
+		const zval *callable, zend_runtime_module *runtime_module, uint32_t check_flags,
+		zend_fcall_info *fci, zend_fcall_info_cache *fcc,
+		zend_string **callable_name, char **error);
 
 /** Clear arguments connected with zend_fcall_info *fci
  * If free_mem is not zero then the params array gets free'd as well
@@ -847,6 +854,10 @@ static zend_always_inline void zend_get_gc_buffer_add_fcc(zend_get_gc_buffer *gc
  * will be UNDEF. Otherwise, the retval will be a non-UNDEF value. */
 ZEND_API zend_result zend_call_function(zend_fcall_info *fci, zend_fcall_info_cache *fci_cache);
 
+/* Execute an already-resolved callable in an explicit module, including NULL for root. */
+ZEND_API zend_result zend_call_function_in_runtime_module(
+	zend_fcall_info *fci, zend_fcall_info_cache *fci_cache, zend_runtime_module *runtime_module);
+
 /* Call the FCI/FCC pair while setting the call return value to the passed zval*. */
 static zend_always_inline zend_result zend_call_function_with_return_value(
 	zend_fcall_info *fci, zend_fcall_info_cache *fci_cache, zval *retval)
@@ -863,6 +874,10 @@ static zend_always_inline zend_result zend_call_function_with_return_value(
 ZEND_API void zend_call_known_function_ex(
 		zend_function *fn, zend_object *object, zend_class_entry *called_scope, zval *retval_ptr,
 		uint32_t param_count, zval *params, HashTable *named_params, uint32_t consumed_args);
+/* A NULL runtime_module explicitly selects the root context. */
+ZEND_API void zend_call_known_fcc_in_runtime_module(
+		const zend_fcall_info_cache *fcc, zend_runtime_module *runtime_module,
+		zval *retval_ptr, uint32_t param_count, zval *params, HashTable *named_params);
 
 static zend_always_inline void zend_call_known_function(
 		zend_function *fn, zend_object *object, zend_class_entry *called_scope, zval *retval_ptr,

@@ -93,13 +93,21 @@ LIVE RANGES:
      0: 0001 - 0002 (tmp/var)
 
 Test4::getTestIA:
-     ; (lines=1, args=0, vars=0, tmps=0)
+     ; (lines=3, args=0, vars=0, tmps=1)
      ; (after optimizer)
      ; %s
-0000 RETURN int(42)
+0000 T0 = FETCH_CLASS_CONSTANT string("TestI") string("A")
+0001 VERIFY_RETURN_TYPE T0
+0002 RETURN T0
+LIVE RANGES:
+     0: 0001 - 0002 (tmp/var)
 
 Test4::getTestIB:
-     ; (lines=1, args=0, vars=0, tmps=0)
+     ; (lines=3, args=0, vars=0, tmps=1)
      ; (after optimizer)
      ; %s
-0000 RETURN int(42)
+0000 T0 = FETCH_CLASS_CONSTANT string("TestI") string("B")
+0001 VERIFY_RETURN_TYPE T0
+0002 RETURN T0
+LIVE RANGES:
+     0: 0001 - 0002 (tmp/var)

@@ -25,6 +25,7 @@
 #include "zend_closures.h"
 #include "zend_extensions.h"
 #include "zend_modules.h"
+#include "zend_runtime_module.h"
 #include "zend_shared_alloc.h"
 #include "zend_accelerator_blacklist.h"
 #include "zend_file_cache.h"
@@ -978,6 +979,11 @@ ZEND_FUNCTION(opcache_compile_file)
 
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "S", &script_name) == FAILURE) {
 		RETURN_THROWS();
+	}
+	if (zend_runtime_context_is_module_sensitive(zend_get_current_runtime_context())) {
+		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME
+			" cannot compile files in a module-sensitive runtime context");
+		RETURN_FALSE;
 	}
 
 	if (!accel_startup_ok) {

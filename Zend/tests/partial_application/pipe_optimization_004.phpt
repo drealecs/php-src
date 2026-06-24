@@ -80,9 +80,9 @@ $_main:
      ; %s:10-10
 0000 CV0($a) = RECV 1
 0001 CV1($b) = RECV 2
-0002 INIT_FCALL 2 %d string("foo")
-0003 SEND_VAR CV0($a) 1
-0004 SEND_VAR CV1($b) 2
-0005 T2 = DO_UCALL
+0002 INIT_FCALL_BY_NAME 2 string("foo")
+0003 SEND_VAR_EX CV0($a) 1
+0004 SEND_VAR_EX CV1($b) 2
+0005 T2 = DO_FCALL_BY_NAME
 0006 RETURN T2
 ArgumentCountError: Too few arguments to function {closure:pfa:%s:%d}(), 1 passed in %s on line %d and exactly 2 expected

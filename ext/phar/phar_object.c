@@ -25,6 +25,7 @@
 #include "main/SAPI.h"
 #include "zend_exceptions.h"
 #include "zend_interfaces.h"
+#include "zend_runtime_module.h"
 
 static zend_class_entry *phar_ce_archive;
 static zend_class_entry *phar_ce_data;
@@ -246,7 +247,7 @@ static phar_action_status phar_file_action(phar_archive_data *phar, phar_entry_i
 			PHAR_G(cwd_len) = 0;
 
 			ZVAL_NULL(&dummy);
-			if (zend_hash_str_add(&EG(included_files), name, name_len, &dummy) != NULL) {
+			if (zend_hash_str_add(RMG(included_files), name, name_len, &dummy) != NULL) {
 				if ((cwd = zend_memrchr(entry, '/', entry_len))) {
 					PHAR_G(cwd_init) = 1;
 					if (entry == cwd) {
@@ -265,7 +266,7 @@ static phar_action_status phar_file_action(phar_archive_data *phar, phar_entry_i
 				new_op_array = zend_compile_file(&file_handle, ZEND_REQUIRE);
 
 				if (!new_op_array) {
-					zend_hash_str_del(&EG(included_files), name, name_len);
+					zend_hash_str_del(RMG(included_files), name, name_len);
 				}
 			} else {
 				efree(name);

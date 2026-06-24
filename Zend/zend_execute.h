@@ -50,6 +50,7 @@ ZEND_API void execute_internal(zend_execute_data *execute_data, zval *return_val
 ZEND_API bool zend_is_valid_class_name(const zend_string *name);
 ZEND_API zend_class_entry *zend_lookup_class(zend_string *name);
 ZEND_API zend_class_entry *zend_lookup_class_ex(zend_string *name, zend_string *lcname, uint32_t flags);
+ZEND_API zend_class_entry *zend_lookup_class_ex_in_runtime_module(zend_runtime_module *runtime_module, zend_string *name, zend_string *lcname, uint32_t flags);
 ZEND_API zend_class_entry *zend_get_called_scope(const zend_execute_data *ex);
 ZEND_API zend_object *zend_get_this_object(const zend_execute_data *ex);
 ZEND_API zend_result zend_eval_string(const char *str, zval *retval_ptr, const char *string_name);
@@ -108,9 +109,11 @@ ZEND_API zend_never_inline ZEND_COLD void zend_verify_never_error(
 		const zend_function *zf);
 ZEND_API bool zend_verify_ref_array_assignable(zend_reference *ref);
 ZEND_API bool zend_check_user_type_slow(
-		const zend_type *type, zval *arg, const zend_reference *ref, bool current_frame);
+		const zend_type *type, zval *arg, const zend_reference *ref, bool current_frame,
+		zend_runtime_module *runtime_module, const zend_class_entry *scope);
 ZEND_API bool zend_check_type_ex(
-		const zend_type *type, zval *arg, bool current_frame, bool is_internal);
+		const zend_type *type, zval *arg, bool current_frame, bool is_internal,
+		zend_runtime_module *runtime_module, const zend_class_entry *scope);
 
 #if ZEND_DEBUG
 ZEND_API bool zend_internal_call_should_throw(const zend_function *fbc, zend_execute_data *call);
@@ -285,6 +288,7 @@ static zend_always_inline void zend_cast_zval_to_array(zval *result, zval *expr,
 
 ZEND_API zend_result ZEND_FASTCALL zval_update_constant(zval *pp);
 ZEND_API zend_result ZEND_FASTCALL zval_update_constant_ex(zval *pp, zend_class_entry *scope);
+ZEND_API zend_result ZEND_FASTCALL zval_update_constant_ex_in_runtime_module(zval *pp, zend_class_entry *scope, zend_runtime_module *runtime_module);
 ZEND_API zend_result ZEND_FASTCALL zval_update_constant_with_ctx(zval *pp, zend_class_entry *scope, zend_ast_evaluate_ctx *ctx);
 
 /* dedicated Zend executor functions - do not use! */
@@ -340,6 +344,12 @@ static zend_always_inline void zend_vm_init_call_frame(zend_execute_data *call, 
 	Z_PTR(call->This) = object_or_called_scope;
 	ZEND_CALL_INFO(call) = call_info;
 	ZEND_CALL_NUM_ARGS(call) = num_args;
+	if (ZEND_USER_CODE(func->common.type)) {
+		call->runtime_module = func->common.runtime_module;
+	} else {
+		call->runtime_module = EG(current_execute_data) ? EG(current_execute_data)->runtime_module : NULL;
+	}
+	call->has_explicit_runtime_module = false;
 }
 
 static zend_always_inline zend_execute_data *zend_vm_stack_push_call_frame_ex(uint32_t used_stack, uint32_t call_info, zend_function *func, uint32_t num_args, void *object_or_called_scope)
@@ -481,8 +491,10 @@ ZEND_API ZEND_NORETURN void ZEND_FASTCALL zend_timeout(void);
 ZEND_API zend_class_entry *zend_fetch_class(zend_string *class_name, uint32_t fetch_type);
 ZEND_API zend_class_entry *zend_fetch_class_with_scope(zend_string *class_name, uint32_t fetch_type, zend_class_entry *scope);
 ZEND_API zend_class_entry *zend_fetch_class_by_name(zend_string *class_name, zend_string *lcname, uint32_t fetch_type);
+ZEND_API zend_class_entry *zend_fetch_class_by_name_in_runtime_module(zend_runtime_module *runtime_module, zend_string *class_name, zend_string *lcname, uint32_t fetch_type);
 
 ZEND_API zend_function * ZEND_FASTCALL zend_fetch_function(zend_string *name);
+ZEND_API zend_function *zend_fetch_function_in_runtime_module(zend_runtime_module *runtime_module, zend_string *name);
 ZEND_API zend_function * ZEND_FASTCALL zend_fetch_function_str(const char *name, size_t len);
 ZEND_API void ZEND_FASTCALL zend_init_func_run_time_cache(zend_op_array *op_array);
 

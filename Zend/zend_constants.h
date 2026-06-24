@@ -45,6 +45,7 @@ typedef struct _zend_constant {
 	zend_string *name;
 	zend_string *filename;
 	HashTable *attributes;
+	zend_runtime_module *runtime_module;
 } zend_constant;
 
 #define ZEND_CONSTANT_FLAGS(c) \
@@ -89,7 +90,9 @@ ZEND_API zval *zend_get_constant(zend_string *name);
 ZEND_API zend_constant *zend_get_constant_ptr(zend_string *name);
 ZEND_API zval *zend_get_constant_str(const char *name, size_t name_len);
 ZEND_API zval *zend_get_constant_ex(zend_string *name, const zend_class_entry *scope, uint32_t flags);
+ZEND_API zval *zend_get_constant_ex_in_runtime_module(zend_runtime_module *runtime_module, zend_string *name, const zend_class_entry *scope, uint32_t flags);
 ZEND_API zval *zend_get_class_constant_ex(zend_string *class_name, zend_string *constant_name, const zend_class_entry *scope, uint32_t flags);
+ZEND_API zval *zend_get_class_constant_ex_in_runtime_module(zend_runtime_module *runtime_module, zend_string *class_name, zend_string *constant_name, const zend_class_entry *scope, uint32_t flags);
 ZEND_API zend_constant *zend_register_bool_constant(const char *name, size_t name_len, bool bval, int flags, int module_number);
 ZEND_API zend_constant *zend_register_null_constant(const char *name, size_t name_len, int flags, int module_number);
 ZEND_API zend_constant *zend_register_long_constant(const char *name, size_t name_len, zend_long lval, int flags, int module_number);

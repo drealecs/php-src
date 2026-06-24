@@ -22,6 +22,7 @@
 #include "zend_closures.h"
 #include "zend_exceptions.h"
 #include "zend_interfaces.h"
+#include "zend_inheritance.h"
 #include "zend_objects.h"
 #include "zend_objects_API.h"
 #include "zend_globals.h"
@@ -45,7 +46,7 @@ ZEND_API zend_class_entry *zend_ce_closure;
 static zend_object_handlers closure_handlers;
 
 static zend_result zend_closure_get_closure(zend_object *obj, zend_class_entry **ce_ptr, zend_function **fptr_ptr, zend_object **obj_ptr, bool check_only);
-static void zend_create_closure_ex(zval *res, zend_function *func, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr, bool is_fake, uint32_t flags);
+static void zend_create_closure_ex(zval *res, zend_function *func, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr, bool is_fake, uint32_t flags, zend_runtime_module *runtime_module);
 
 static inline uint32_t zend_closure_flags(const zend_closure *closure)
 {
@@ -180,7 +181,7 @@ ZEND_METHOD(Closure, call)
 		zval new_closure;
 		zend_create_closure_ex(&new_closure, &closure->func, newclass,
 				closure->called_scope, new_this,
-				zend_closure_is_fake(closure), zend_closure_flags(closure));
+				zend_closure_is_fake(closure), zend_closure_flags(closure), closure->func.common.runtime_module);
 		closure = (zend_closure *) Z_OBJ(new_closure);
 		fci_cache.function_handler = &closure->func;
 
@@ -273,7 +274,7 @@ static zend_result do_closure_bind(zval *return_value, zval *zclosure, zend_obje
 	}
 
 	zend_create_closure_ex(return_value, &closure->func, ce, called_scope, new_this,
-		zend_closure_is_fake(closure), zend_closure_flags(closure));
+		zend_closure_is_fake(closure), zend_closure_flags(closure), closure->func.common.runtime_module);
 
 	if (zend_closure_flags(closure) & ZEND_PARTIAL_OF_CLOSURE) {
 		/* Re-bind the inner closure */
@@ -630,7 +631,7 @@ static zend_object *zend_closure_clone(zend_object *zobject) /* {{{ */
 	zend_create_closure_ex(&result, &closure->func,
 		closure->func.common.scope, closure->called_scope,
 		closure->this_ptr,
-		zend_closure_is_fake(closure), zend_closure_flags(closure));
+		zend_closure_is_fake(closure), zend_closure_flags(closure), closure->func.common.runtime_module);
 	return Z_OBJ(result);
 }
 /* }}} */
@@ -804,7 +805,7 @@ static ZEND_NAMED_FUNCTION(zend_closure_internal_handler) /* {{{ */
 static void zend_create_closure_ex(
 	zval *res, zend_function *func,
 	zend_class_entry *scope, zend_class_entry *called_scope,
-	zend_object *this_ptr, bool is_fake, uint32_t flags) /* {{{ */
+	zend_object *this_ptr, bool is_fake, uint32_t flags, zend_runtime_module *runtime_module) /* {{{ */
 {
 	zend_closure *closure;
 	void *ptr;
@@ -824,6 +825,8 @@ static void zend_create_closure_ex(
 		memcpy(&closure->func, func, sizeof(zend_op_array));
 		closure->func.common.fn_flags |= ZEND_ACC_CLOSURE;
 		closure->func.common.fn_flags &= ~ZEND_ACC_IMMUTABLE;
+		closure->func.common.runtime_module = runtime_module;
+		zend_runtime_module_copy_class_templates(&func->op_array, runtime_module);
 
 		zend_string_addref(closure->func.op_array.function_name);
 		if (closure->func.op_array.refcount) {
@@ -850,10 +853,12 @@ static void zend_create_closure_ex(
 		ptr = ZEND_MAP_PTR_GET(func->op_array.run_time_cache);
 		if (!ptr
 			|| func->common.scope != scope
+			|| func->common.runtime_module != runtime_module
 			|| (func->common.fn_flags & ZEND_ACC_HEAP_RT_CACHE)
 		) {
 			if (!ptr
 			 && (func->common.fn_flags & ZEND_ACC_CLOSURE)
+			 && func->common.runtime_module == runtime_module
 			 && (func->common.scope == scope ||
 			     !(func->common.fn_flags & ZEND_ACC_IMMUTABLE))) {
 				/* If a real closure is used for the first time, we create a shared runtime cache
@@ -912,7 +917,14 @@ ZEND_API void zend_create_closure(zval *res, zend_function *func, zend_class_ent
 {
 	zend_create_closure_ex(res, func, scope, called_scope, this_ptr,
 		/* is_fake */ (func->common.fn_flags & ZEND_ACC_FAKE_CLOSURE) != 0,
-		/* flags */ 0);
+		/* flags */ 0, func->common.runtime_module);
+}
+
+ZEND_API void zend_create_closure_in_runtime_module(zval *res, zend_function *func, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr, zend_runtime_module *runtime_module)
+{
+	zend_create_closure_ex(res, func, scope, called_scope, this_ptr,
+		/* is_fake */ (func->common.fn_flags & ZEND_ACC_FAKE_CLOSURE) != 0,
+		/* flags */ 0, runtime_module);
 }
 
 ZEND_API void zend_create_fake_closure(zval *res, zend_function *func, zend_class_entry *scope, zend_class_entry *called_scope, zend_object *this_ptr) /* {{{ */
@@ -920,7 +932,7 @@ ZEND_API void zend_create_fake_closure(zval *res, zend_function *func, zend_clas
 	zend_closure *closure;
 
 	zend_create_closure_ex(res, func, scope, called_scope, this_ptr,
-			/* is_fake */ true, /* flags */ 0);
+			/* is_fake */ true, /* flags */ 0, func->common.runtime_module);
 
 	closure = (zend_closure *)Z_OBJ_P(res);
 	closure->func.common.fn_flags |= ZEND_ACC_FAKE_CLOSURE;
@@ -937,7 +949,7 @@ ZEND_API void zend_create_partial_closure(zval *res, zend_function *func, zend_c
 		flags |= ZEND_PARTIAL_OF_CLOSURE;
 	}
 	zend_create_closure_ex(res, func, scope, called_scope, this_ptr,
-			/* is_fake */ false, flags);
+			/* is_fake */ false, flags, func->common.runtime_module);
 }
 
 void zend_closure_from_frame(zval *return_value, const zend_execute_data *call) { /* {{{ */

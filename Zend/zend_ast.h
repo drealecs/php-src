@@ -23,6 +23,8 @@
 #include "zend_types.h"
 #include "zend_map_ptr.h"
 
+typedef struct _zend_runtime_module zend_runtime_module;
+
 #ifndef ZEND_AST_SPEC
 # define ZEND_AST_SPEC 1
 #endif
@@ -346,6 +348,7 @@ ZEND_API zend_ast * ZEND_FASTCALL zend_ast_create_fcc(zend_ast *args);
 
 typedef struct {
 	bool had_side_effects;
+	zend_runtime_module *runtime_module;
 } zend_ast_evaluate_ctx;
 
 ZEND_API zend_result ZEND_FASTCALL zend_ast_evaluate(zval *result, zend_ast *ast, zend_class_entry *scope);

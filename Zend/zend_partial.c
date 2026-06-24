@@ -52,6 +52,7 @@
 #include "zend_attributes.h"
 #include "zend_exceptions.h"
 #include "zend_partial.h"
+#include "zend_runtime_module.h"
 #include "ext/opcache/ZendAccelerator.h"
 
 static zend_always_inline bool Z_IS_PLACEHOLDER_P(const zval *p) {
@@ -578,7 +579,8 @@ static zend_ast *zp_compile_forwarding_call(
 			}
 			if (arg_info && ZEND_TYPE_IS_SET(arg_info->type)
 					&& UNEXPECTED(!zend_check_type_ex(&arg_info->type, &argv[offset],
-						/* current_frame */ true, /* is_internal */ false))) {
+						/* current_frame */ true, /* is_internal */ false,
+						function->common.runtime_module, function->common.scope))) {
 				zend_string *need_msg = zend_type_to_string_resolved(arg_info->type,
 						function->common.scope);
 				zend_argument_type_error_ex(function, offset + 1,
@@ -699,7 +701,8 @@ static zend_op_array *zp_compile(zval *this_ptr, zend_function *function,
 		const zend_array *named_positions,
 		zend_string *declaring_filename,
 		const uint32_t *declaring_lineno_ptr, void **cache_slot,
-		zend_string *pfa_name, uint32_t flags, uint32_t const_args) {
+		zend_string *pfa_name, uint32_t flags, uint32_t const_args,
+		zend_runtime_module *runtime_module) {
 
 	zend_op_array *op_array = NULL;
 
@@ -1012,7 +1015,8 @@ static zend_op_array *zp_compile(zval *this_ptr, zend_function *function,
 #endif
 
 	op_array = zend_accel_compile_pfa(closure_ast, declaring_filename,
-			declaring_lineno_ptr, function, pfa_name, flags & ZEND_PARTIAL_CACHEABLE_IN_SHM);
+			declaring_lineno_ptr, function, pfa_name, flags & ZEND_PARTIAL_CACHEABLE_IN_SHM,
+			runtime_module);
 
 	zend_ast_destroy(closure_ast);
 
@@ -1039,9 +1043,16 @@ static const zend_op_array *zp_get_op_array(zval *this_ptr, zend_function *funct
 		const zend_array *named_positions,
 		zend_string *declaring_filename,
 		const uint32_t *declaring_lineno_ptr, void **cache_slot,
-		zend_string *pfa_name, uint32_t flags, uint32_t const_args) {
+		zend_string *pfa_name, uint32_t flags, uint32_t const_args,
+		zend_runtime_module *runtime_module) {
 
-	if (EXPECTED(function->type == ZEND_INTERNAL_FUNCTION
+	bool module_sensitive = function->common.runtime_module
+		|| zend_runtime_context_is_module_sensitive(zend_runtime_module_context(runtime_module));
+	if (module_sensitive) {
+		flags &= ~ZEND_PARTIAL_CACHEABLE_IN_SHM;
+	}
+
+	if (!module_sensitive && EXPECTED(function->type == ZEND_INTERNAL_FUNCTION
 					? cache_slot[0] == function
 					: cache_slot[0] == function->op_array.opcodes)) {
 		ZEND_ASSERT(!(function->common.fn_flags & ZEND_ACC_NEVER_CACHE));
@@ -1049,15 +1060,15 @@ static const zend_op_array *zp_get_op_array(zval *this_ptr, zend_function *funct
 	}
 
 	const zend_op_array *op_array = zend_accel_pfa_cache_get(declaring_lineno_ptr, function,
-			flags & ZEND_PARTIAL_CACHEABLE_IN_SHM);
+			flags & ZEND_PARTIAL_CACHEABLE_IN_SHM, runtime_module);
 
 	if (UNEXPECTED(!op_array)) {
 		op_array = zp_compile(this_ptr, function, argc, argv,
 			extra_named_params, named_positions, declaring_filename, declaring_lineno_ptr,
-			cache_slot, pfa_name, flags, const_args);
+			cache_slot, pfa_name, flags, const_args, runtime_module);
 	}
 
-	if (EXPECTED(op_array) && !(function->common.fn_flags & ZEND_ACC_NEVER_CACHE)) {
+	if (!module_sensitive && EXPECTED(op_array) && !(function->common.fn_flags & ZEND_ACC_NEVER_CACHE)) {
 		cache_slot[0] = function->type == ZEND_INTERNAL_FUNCTION
 			? (void*)function
 			: (void*)function->op_array.opcodes;
@@ -1104,7 +1115,8 @@ static void zp_bind(zval *result, zend_function *function, uint32_t argc, zval *
 		}
 		if (arg_info && ZEND_TYPE_IS_SET(arg_info->type)
 				&& UNEXPECTED(!zend_check_type_ex(&arg_info->type, var,
-					/* current_frame */ true, /* is_internal */ false))) {
+					/* current_frame */ true, /* is_internal */ false,
+					function->common.runtime_module, function->common.scope))) {
 			zend_string *need_msg = zend_type_to_string_resolved(arg_info->type,
 					function->common.scope);
 			zend_argument_type_error_ex(function, offset + 1,
@@ -1134,14 +1146,15 @@ void zend_partial_create(zval *result, zend_class_entry *scope, zval *this_ptr, 
 		const zend_array *named_positions,
 		zend_string *declaring_filename,
 		const uint32_t *declaring_lineno_ptr, void **cache_slot,
-		zend_string *pfa_name, uint32_t flags, uint32_t const_args) {
+		zend_string *pfa_name, uint32_t flags, uint32_t const_args,
+		zend_runtime_module *runtime_module) {
 
 	ZEND_ASSERT(pfa_name);
 
 	const zend_op_array *op_array = zp_get_op_array(this_ptr, function, argc, argv,
 			extra_named_params, named_positions,
 			declaring_filename, declaring_lineno_ptr,
-			cache_slot, pfa_name, flags, const_args);
+			cache_slot, pfa_name, flags, const_args, runtime_module);
 
 	if (UNEXPECTED(!op_array)) {
 		ZEND_ASSERT(EG(exception));

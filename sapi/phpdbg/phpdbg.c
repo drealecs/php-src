@@ -27,6 +27,7 @@
 #include "phpdbg_help.h"
 #include "phpdbg_arginfo.h"
 #include "zend_vm.h"
+#include "zend_runtime_module.h"
 #include "php_ini_builder.h"
 #include "php_main.h"
 
@@ -876,6 +877,17 @@ static ssize_t phpdbg_stdiop_write(php_stream *stream, const char *buf, size_t c
 }
 #endif
 
+static void phpdbg_replace_constant(zend_constant *constant)
+{
+	zend_constant *old_constant = zend_hash_find_ptr(EG(zend_constants), constant->name);
+
+	if (old_constant) {
+		zend_runtime_context_remove_visible_internal_constant(constant->name, old_constant);
+		zend_hash_del(EG(zend_constants), constant->name);
+	}
+	zend_register_constant(constant);
+}
+
 /* copied from sapi/cli/php_cli.c cli_register_file_handles */
 void phpdbg_register_file_handles(void) /* {{{ */
 {
@@ -908,20 +920,17 @@ void phpdbg_register_file_handles(void) /* {{{ */
 	ic.value = zin;
 	Z_CONSTANT_FLAGS(ic.value) = 0;
 	ic.name = zend_string_init(ZEND_STRL("STDIN"), 0);
-	zend_hash_del(EG(zend_constants), ic.name);
-	zend_register_constant(&ic);
+	phpdbg_replace_constant(&ic);
 
 	oc.value = zout;
 	Z_CONSTANT_FLAGS(oc.value) = 0;
 	oc.name = zend_string_init(ZEND_STRL("STDOUT"), 0);
-	zend_hash_del(EG(zend_constants), oc.name);
-	zend_register_constant(&oc);
+	phpdbg_replace_constant(&oc);
 
 	ec.value = zerr;
 	Z_CONSTANT_FLAGS(ec.value) = 0;
 	ec.name = zend_string_init(ZEND_STRL("STDERR"), 0);
-	zend_hash_del(EG(zend_constants), ec.name);
-	zend_register_constant(&ec);
+	phpdbg_replace_constant(&ec);
 }
 /* }}} */
 

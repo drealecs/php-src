@@ -1532,6 +1532,9 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 		}
 
 		zend_jit_bb_start(&ctx, b);
+		if (ssa->cfg.blocks[b].flags & ZEND_BB_START) {
+			zend_jit_check_runtime_module(&ctx, op_array->opcodes + ssa->cfg.blocks[b].start);
+		}
 
 		if ((JIT_G(opt_flags) & ZEND_JIT_REG_ALLOC_GLOBAL) && ctx.ra) {
 			zend_ssa_phi *phi = ssa->blocks[b].phis;
@@ -3325,6 +3328,10 @@ int zend_jit_op_array(zend_op_array *op_array, zend_script *script)
 	if (dasm_ptr == NULL) {
 		return FAILURE;
 	}
+	if ((op_array->fn_flags & ZEND_ACC_CLOSURE)
+			&& JIT_G(trigger) != ZEND_JIT_ON_HOT_TRACE) {
+		return SUCCESS;
+	}
 
 	if (JIT_G(trigger) == ZEND_JIT_ON_FIRST_EXEC) {
 		zend_jit_op_array_extension *jit_extension;
@@ -3410,6 +3417,21 @@ static void zend_jit_link_func_info(zend_op_array *op_array)
 	}
 }
 
+static bool zend_jit_calls_module_add_dependency(zend_func_info *info)
+{
+	zend_call_info *call_info = info->callee_info;
+
+	while (call_info) {
+		zend_function *callee = call_info->callee_func;
+		if (callee && callee->type == ZEND_INTERNAL_FUNCTION
+				&& zend_string_equals_literal(callee->common.function_name, "module_add_dependency")) {
+			return true;
+		}
+		call_info = call_info->next_callee;
+	}
+	return false;
+}
+
 int zend_jit_script(zend_script *script)
 {
 	void *checkpoint;
@@ -3471,7 +3493,9 @@ int zend_jit_script(zend_script *script)
 
 		for (i = 0; i < call_graph.op_arrays_count; i++) {
 			info = ZEND_FUNC_INFO(call_graph.op_arrays[i]);
-			if (info) {
+			if (info
+					&& !(call_graph.op_arrays[i]->fn_flags & ZEND_ACC_CLOSURE)
+					&& !zend_jit_calls_module_add_dependency(info)) {
 				if (JIT_G(debug) & ZEND_JIT_DEBUG_SSA) {
 					zend_dump_op_array(call_graph.op_arrays[i], ZEND_DUMP_HIDE_UNREACHABLE|ZEND_DUMP_RC_INFERENCE|ZEND_DUMP_SSA, "JIT", &info->ssa);
 				}

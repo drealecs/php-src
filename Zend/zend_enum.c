@@ -288,7 +288,8 @@ static ZEND_NAMED_FUNCTION(zend_enum_cases_func)
 		}
 		zval *zv = &c->value;
 		if (Z_TYPE_P(zv) == IS_CONSTANT_AST) {
-			if (zval_update_constant_ex(zv, c->ce) == FAILURE) {
+			if (zval_update_constant_ex_in_runtime_module(
+					zv, c->ce, c->ce->runtime_module) == FAILURE) {
 				RETURN_THROWS();
 			}
 		}
@@ -342,7 +343,8 @@ not_found:
 	ZEND_ASSERT(c != NULL);
 	zval *case_zv = &c->value;
 	if (Z_TYPE_P(case_zv) == IS_CONSTANT_AST) {
-		if (zval_update_constant_ex(case_zv, c->ce) == FAILURE) {
+		if (zval_update_constant_ex_in_runtime_module(
+				case_zv, c->ce, c->ce->runtime_module) == FAILURE) {
 			return FAILURE;
 		}
 	}
@@ -655,7 +657,8 @@ static zend_object *zend_enum_case_from_class_constant(zend_class_constant *c) {
 	ZEND_ASSERT(ZEND_CLASS_CONST_FLAGS(c) & ZEND_CLASS_CONST_IS_CASE);
 
 	if (Z_TYPE(c->value) == IS_CONSTANT_AST) {
-		if (zval_update_constant_ex(&c->value, c->ce) == FAILURE) {
+		if (zval_update_constant_ex_in_runtime_module(
+				&c->value, c->ce, c->ce->runtime_module) == FAILURE) {
 			ZEND_UNREACHABLE();
 		}
 	}
