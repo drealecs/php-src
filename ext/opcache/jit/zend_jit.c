@@ -26,6 +26,7 @@
 #include "Zend/zend_closures.h"
 #include "Zend/zend_ini.h"
 #include "Zend/zend_observer.h"
+#include "Zend/zend_runtime_module.h"
 #include "zend_smart_str.h"
 #include "jit/zend_jit.h"
 
@@ -550,6 +551,11 @@ static bool zend_jit_is_persistent_constant(zval *key, uint32_t flags)
 	zval *zv;
 	zend_constant *c = NULL;
 
+	if (zend_get_current_runtime_module()
+			|| zend_hash_num_elements(&EG(runtime_module_root_dependencies)) != 0) {
+		return false;
+	}
+
 	/* null/true/false are resolved during compilation, so don't check for them here. */
 	zv = zend_hash_find_known_hash(EG(zend_constants), Z_STR_P(key));
 	if (zv) {
@@ -567,6 +573,11 @@ static bool zend_jit_is_persistent_constant(zval *key, uint32_t flags)
 static zend_class_entry* zend_get_known_class(const zend_op_array *op_array, const zend_op *opline, uint8_t op_type, znode_op op)
 {
 	zend_class_entry *ce = NULL;
+
+	if (op_array->runtime_module || zend_get_current_runtime_module()
+			|| zend_hash_num_elements(&EG(runtime_module_root_dependencies)) != 0) {
+		return NULL;
+	}
 
 	if (op_type == IS_CONST) {
 		zval *zv = RT_CONSTANT(opline, op);
@@ -2829,7 +2840,8 @@ static int zend_jit(const zend_op_array *op_array, zend_ssa *ssa, const zend_op 
 									ce = res_ssa->ce;
 								}
 							}
-						} else {
+						} else if (!op_array->runtime_module && !zend_get_current_runtime_module()
+								&& zend_hash_num_elements(&EG(runtime_module_root_dependencies)) == 0) {
 							if (opline->op1_type == IS_CONST) {
 								zval *zv = RT_CONSTANT(opline, opline->op1);
 								if (Z_TYPE_P(zv) == IS_STRING) {

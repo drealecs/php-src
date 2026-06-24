@@ -8484,6 +8484,52 @@ static int zend_jit_free_trampoline(zend_jit_ctx *jit, ir_ref func)
 	return 1;
 }
 
+static ir_ref zend_jit_func_runtime_module(zend_jit_ctx *jit, ir_ref func_ref, bool is_closure)
+{
+	const size_t func_type_offset = is_closure ?
+		offsetof(zend_closure, func.common.type) : offsetof(zend_function, common.type);
+	const size_t runtime_module_offset = is_closure ?
+		offsetof(zend_closure, func.common.runtime_module) : offsetof(zend_function, common.runtime_module);
+	ir_ref type, if_internal_func, current_runtime_module, current_runtime_module_end, func_runtime_module;
+
+	type = ir_LOAD_U8(ir_ADD_OFFSET(func_ref, func_type_offset));
+	if_internal_func = ir_IF(ir_AND_U8(type, ir_CONST_U8(ZEND_INTERNAL_FUNCTION)));
+	ir_IF_TRUE(if_internal_func);
+
+	current_runtime_module = ir_LOAD_A(jit_EX(runtime_module));
+	current_runtime_module_end = ir_END();
+
+	ir_IF_FALSE(if_internal_func);
+	func_runtime_module = ir_LOAD_A(ir_ADD_OFFSET(func_ref, runtime_module_offset));
+
+	ir_MERGE_WITH(current_runtime_module_end);
+	return ir_PHI_2(IR_ADDR, func_runtime_module, current_runtime_module);
+}
+
+static void zend_jit_init_call_frame_runtime_module(
+	zend_jit_ctx *jit, ir_ref call, zend_function *func, bool is_closure, ir_ref func_ref)
+{
+	ir_ref runtime_module_override, if_override, override_end, runtime_module;
+
+	runtime_module_override = ir_LOAD_A(jit_EG(runtime_module_override));
+	if_override = ir_IF(runtime_module_override);
+	ir_IF_TRUE(if_override);
+
+	ir_STORE(jit_CALL(call, runtime_module), runtime_module_override);
+	ir_STORE(jit_EG(runtime_module_override), IR_NULL);
+	override_end = ir_END();
+
+	ir_IF_FALSE(if_override);
+	if (!is_closure && func && func->common.type == ZEND_INTERNAL_FUNCTION) {
+		runtime_module = ir_LOAD_A(jit_EX(runtime_module));
+	} else {
+		runtime_module = zend_jit_func_runtime_module(jit, func_ref, is_closure);
+	}
+	ir_STORE(jit_CALL(call, runtime_module), runtime_module);
+
+	ir_MERGE_WITH(override_end);
+}
+
 static int zend_jit_push_call_frame(zend_jit_ctx *jit, const zend_op *opline, const zend_op_array *op_array, zend_function *func, bool is_closure, bool delayed_fetch_this, int checked_stack, ir_ref func_ref, ir_ref this_ref)
 {
 	uint32_t used_stack;
@@ -8740,6 +8786,8 @@ static int zend_jit_push_call_frame(zend_jit_ctx *jit, const zend_op *opline, co
 			ir_MERGE_WITH_EMPTY_FALSE(if_cond_user);
 		}
 	}
+
+	zend_jit_init_call_frame_runtime_module(jit, rx, func, is_closure, func_ref);
 
 	// JIT: ZEND_CALL_NUM_ARGS(call) = num_args;
 	ir_STORE(jit_CALL(rx, This.u2.num_args), ir_CONST_U32(opline->extended_value));

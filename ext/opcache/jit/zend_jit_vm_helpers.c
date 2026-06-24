@@ -21,6 +21,7 @@
 #include "Zend/zend_closures.h"
 #include "Zend/zend_constants.h"
 #include "Zend/zend_API.h"
+#include "Zend/zend_runtime_module.h"
 
 #include <ZendAccelerator.h>
 #include "Optimizer/zend_func_info.h"
@@ -368,6 +369,11 @@ ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV zend_jit_func_counter_helper(Z
 	zend_jit_op_array_hot_extension *jit_extension =
 		(zend_jit_op_array_hot_extension*)ZEND_FUNC_INFO(&EX(func)->op_array);
 
+	if (UNEXPECTED(EX(runtime_module) != NULL)) {
+		zend_vm_opcode_handler_t handler = (zend_vm_opcode_handler_t)jit_extension->orig_handlers[opline - EX(func)->op_array.opcodes];
+		ZEND_OPCODE_TAIL_CALL(handler);
+	}
+
 	*(jit_extension->counter) -= ((ZEND_JIT_COUNTER_INIT + JIT_G(hot_func) - 1) / JIT_G(hot_func));
 
 	if (UNEXPECTED(*(jit_extension->counter) <= 0)) {
@@ -384,6 +390,11 @@ ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV zend_jit_loop_counter_helper(Z
 {
 	zend_jit_op_array_hot_extension *jit_extension =
 		(zend_jit_op_array_hot_extension*)ZEND_FUNC_INFO(&EX(func)->op_array);
+
+	if (UNEXPECTED(EX(runtime_module) != NULL)) {
+		zend_vm_opcode_handler_t handler = jit_extension->orig_handlers[opline - EX(func)->op_array.opcodes];
+		ZEND_OPCODE_TAIL_CALL(handler);
+	}
 
 	*(jit_extension->counter) -= ((ZEND_JIT_COUNTER_INIT + JIT_G(hot_loop) - 1) / JIT_G(hot_loop));
 
@@ -407,16 +418,27 @@ static zend_always_inline zend_constant* _zend_quick_get_constant(
 	const zend_op *opline = EX(opline);
 	zval *zv;
 	zend_constant *c = NULL;
+	zend_runtime_module *runtime_module = zend_get_current_runtime_module();
+	bool module_sensitive = runtime_module
+		|| zend_hash_num_elements(&EG(runtime_module_root_dependencies)) != 0;
 
 	/* null/true/false are resolved during compilation, so don't check for them here. */
-	zv = zend_hash_find_known_hash(EG(zend_constants), Z_STR_P(key));
-	if (zv) {
-		c = (zend_constant*)Z_PTR_P(zv);
-	} else if (flags & IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE) {
-		key++;
+	if (module_sensitive) {
+		c = zend_get_constant_ptr(Z_STR_P(key));
+		if (!c && (flags & IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE)) {
+			key++;
+			c = zend_get_constant_ptr(Z_STR_P(key));
+		}
+	} else {
 		zv = zend_hash_find_known_hash(EG(zend_constants), Z_STR_P(key));
 		if (zv) {
 			c = (zend_constant*)Z_PTR_P(zv);
+		} else if (flags & IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE) {
+			key++;
+			zv = zend_hash_find_known_hash(EG(zend_constants), Z_STR_P(key));
+			if (zv) {
+				c = (zend_constant*)Z_PTR_P(zv);
+			}
 		}
 	}
 
@@ -425,7 +447,9 @@ static zend_always_inline zend_constant* _zend_quick_get_constant(
 			zend_throw_error(NULL, "Undefined constant \"%s\"", Z_STRVAL_P(RT_CONSTANT(opline, opline->op2)));
 			ZVAL_UNDEF(EX_VAR(opline->result.var));
 		}
-		CACHE_PTR(opline->extended_value, ENCODE_SPECIAL_CACHE_NUM(zend_hash_num_elements(EG(zend_constants))));
+		if (!module_sensitive) {
+			CACHE_PTR(opline->extended_value, ENCODE_SPECIAL_CACHE_NUM(zend_hash_num_elements(EG(zend_constants))));
+		}
 		return NULL;
 	}
 
@@ -444,7 +468,9 @@ static zend_always_inline zend_constant* _zend_quick_get_constant(
 		}
 	}
 
-	CACHE_PTR(opline->extended_value, c);
+	if (!module_sensitive) {
+		CACHE_PTR(opline->extended_value, c);
+	}
 	return c;
 }
 
@@ -464,6 +490,11 @@ static zend_always_inline ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV zend
 	zend_jit_op_array_trace_extension *jit_extension =
 		(zend_jit_op_array_trace_extension*)ZEND_FUNC_INFO(&EX(func)->op_array);
 	size_t offset = jit_extension->offset;
+
+	if (UNEXPECTED(EX(runtime_module) != NULL)) {
+		zend_vm_opcode_handler_t handler = ZEND_OP_TRACE_INFO(opline, offset)->orig_handler;
+		ZEND_OPCODE_TAIL_CALL(handler);
+	}
 
 	if (UNEXPECTED(*(ZEND_OP_TRACE_INFO(opline, offset)->counter) <= 0)) {
 		*(ZEND_OP_TRACE_INFO(opline, offset)->counter) = ZEND_JIT_COUNTER_INIT;
@@ -501,6 +532,11 @@ ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV zend_jit_func_trace_helper(ZEN
 	size_t offset = jit_extension->offset;
 	uint32_t cost = ((ZEND_JIT_COUNTER_INIT + JIT_G(hot_func) - 1) / JIT_G(hot_func));
 
+	if (UNEXPECTED(EX(runtime_module) != NULL)) {
+		zend_vm_opcode_handler_t handler = ZEND_OP_TRACE_INFO(opline, offset)->orig_handler;
+		ZEND_OPCODE_TAIL_CALL(handler);
+	}
+
 	*(ZEND_OP_TRACE_INFO(opline, offset)->counter) -= cost;
 
 	ZEND_OPCODE_TAIL_CALL(zend_jit_trace_counter_helper);
@@ -513,6 +549,11 @@ ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV zend_jit_ret_trace_helper(ZEND
 	size_t offset = jit_extension->offset;
 	uint32_t cost = ((ZEND_JIT_COUNTER_INIT + JIT_G(hot_return) - 1) / JIT_G(hot_return));
 
+	if (UNEXPECTED(EX(runtime_module) != NULL)) {
+		zend_vm_opcode_handler_t handler = ZEND_OP_TRACE_INFO(opline, offset)->orig_handler;
+		ZEND_OPCODE_TAIL_CALL(handler);
+	}
+
 	*(ZEND_OP_TRACE_INFO(opline, offset)->counter) -= cost;
 
 	ZEND_OPCODE_TAIL_CALL(zend_jit_trace_counter_helper);
@@ -524,6 +565,11 @@ ZEND_OPCODE_HANDLER_RET ZEND_OPCODE_HANDLER_CCONV zend_jit_loop_trace_helper(ZEN
 		(zend_jit_op_array_trace_extension*)ZEND_FUNC_INFO(&EX(func)->op_array);
 	size_t offset = jit_extension->offset;
 	uint32_t cost = ((ZEND_JIT_COUNTER_INIT + JIT_G(hot_loop) - 1) / JIT_G(hot_loop));
+
+	if (UNEXPECTED(EX(runtime_module) != NULL)) {
+		zend_vm_opcode_handler_t handler = ZEND_OP_TRACE_INFO(opline, offset)->orig_handler;
+		ZEND_OPCODE_TAIL_CALL(handler);
+	}
 
 	*(ZEND_OP_TRACE_INFO(opline, offset)->counter) -= cost;
 
