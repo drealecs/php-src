@@ -39,6 +39,7 @@
 #include "zend_hrtime.h"
 #include "zend_enum.h"
 #include "zend_closures.h"
+#include "zend_runtime_module.h"
 #include "Optimizer/zend_optimizer.h"
 #include "php.h"
 #include "php_globals.h"
@@ -1964,7 +1965,7 @@ ZEND_API zend_result zend_execute_script(int type, zval *retval, zend_file_handl
 {
 	zend_op_array *op_array = zend_compile_file(file_handle, type);
 	if (file_handle->opened_path) {
-		zend_hash_add_empty_element(&EG(included_files), file_handle->opened_path);
+		zend_hash_add_empty_element(RMG(included_files), file_handle->opened_path);
 	}
 
 	zend_result ret = SUCCESS;

@@ -17,6 +17,7 @@
 #include "php_incomplete_class.h"
 #include "zend_portability.h"
 #include "zend_exceptions.h"
+#include "zend_runtime_module.h"
 
 /* {{{ reference-handling for unserializer: var_* */
 #define VAR_ENTRIES_MAX 1018     /* 1024 - offsetof(php_unserialize_data, entries) / sizeof(void*) */
@@ -1147,6 +1148,7 @@ object ":" uiv ":" ["]	{
 	bool incomplete_class = 0;
 	bool custom_object = 0;
 	bool has_unserialize = 0;
+	bool root_context;
 
 	zval user_func;
 	zval retval;
@@ -1193,11 +1195,11 @@ object ":" uiv ":" ["]	{
 	}
 
 	class_name = zend_string_init_interned(str, len, 0);
+	root_context = !zend_get_current_runtime_module();
 
 	do {
 		zend_string *lc_name;
-
-		if (!(*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
+		if (root_context && !(*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
 			ce = ZSTR_GET_CE_CACHE(class_name);
 			if (ce) {
 				break;
@@ -1216,7 +1218,7 @@ object ":" uiv ":" ["]	{
 			break;
 		}
 
-		if ((*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
+		if (root_context && (*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
 			ce = ZSTR_GET_CE_CACHE(class_name);
 			if (ce) {
 				zend_string_release_ex(lc_name, 0);
@@ -1224,7 +1226,7 @@ object ":" uiv ":" ["]	{
 			}
 		}
 
-		ce = zend_hash_find_ptr(EG(class_table), lc_name);
+		ce = zend_hash_find_ptr(RMG(class_table), lc_name);
 		if (ce
 		 && (ce->ce_flags & ZEND_ACC_LINKED)
 		 && !(ce->ce_flags & ZEND_ACC_ANON_CLASS)) {

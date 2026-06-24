@@ -27,6 +27,7 @@
 #include "zend_sort.h"
 #include "zend_constants.h"
 #include "zend_observer.h"
+#include "zend_runtime_module.h"
 
 #include "zend_vm.h"
 
@@ -71,6 +72,7 @@ void init_op_array(zend_op_array *op_array, zend_function_type type, int initial
 	op_array->required_num_args = 0;
 
 	op_array->scope = NULL;
+	op_array->runtime_module = zend_get_current_runtime_module();
 	op_array->prototype = NULL;
 	op_array->prop_info = NULL;
 

@@ -42,6 +42,7 @@
 #include "zend_API.h"
 #include "zend_ini.h"
 #include "zend_virtual_cwd.h"
+#include "zend_runtime_module.h"
 #include "zend_accelerator_util_funcs.h"
 #include "zend_accelerator_hash.h"
 #include "zend_file_cache.h"
@@ -1937,7 +1938,7 @@ static zend_op_array *file_cache_compile_file(zend_file_handle *file_handle, int
 			    EG(current_execute_data)->opline->opcode != ZEND_INCLUDE_OR_EVAL ||
 			    (EG(current_execute_data)->opline->extended_value != ZEND_INCLUDE_ONCE &&
 			     EG(current_execute_data)->opline->extended_value != ZEND_REQUIRE_ONCE)) {
-				if (zend_hash_add_empty_element(&EG(included_files), persistent_script->script.filename) != NULL) {
+				if (zend_hash_add_empty_element(RMG(included_files), persistent_script->script.filename) != NULL) {
 					/* ext/phar has to load phar's metadata into memory */
 					if (persistent_script->is_phar) {
 						php_stream_statbuf ssb;
@@ -2012,6 +2013,11 @@ zend_op_array *persistent_compile_file(zend_file_handle *file_handle, int type)
 	zend_persistent_script *persistent_script = NULL;
 	zend_string *key = NULL;
 	bool from_shared_memory; /* if the script we've got is stored in SHM */
+	if (zend_get_current_runtime_module()) {
+		ZCG(cache_opline) = NULL;
+		ZCG(cache_persistent_script) = NULL;
+		return accelerator_orig_compile_file(file_handle, type);
+	}
 
 	if (!file_handle->filename || !ZCG(accelerator_enabled)) {
 		/* The Accelerator is disabled, act as if without the Accelerator */
@@ -2256,7 +2262,7 @@ zend_op_array *persistent_compile_file(zend_file_handle *file_handle, int type)
 			    EG(current_execute_data)->opline->opcode != ZEND_INCLUDE_OR_EVAL ||
 			    (EG(current_execute_data)->opline->extended_value != ZEND_INCLUDE_ONCE &&
 			     EG(current_execute_data)->opline->extended_value != ZEND_REQUIRE_ONCE)) {
-				if (zend_hash_add_empty_element(&EG(included_files), persistent_script->script.filename) != NULL) {
+				if (zend_hash_add_empty_element(RMG(included_files), persistent_script->script.filename) != NULL) {
 					/* ext/phar has to load phar's metadata into memory */
 					if (persistent_script->is_phar) {
 						php_stream_statbuf ssb;
@@ -4645,7 +4651,7 @@ static zend_result accel_preload(const char *config, bool in_child)
 		ret = SUCCESS;
 		op_array = zend_compile_file(&file_handle, ZEND_REQUIRE);
 		if (file_handle.opened_path) {
-			zend_hash_add_empty_element(&EG(included_files), file_handle.opened_path);
+			zend_hash_add_empty_element(RMG(included_files), file_handle.opened_path);
 		}
 		zend_destroy_file_handle(&file_handle);
 		if (op_array) {

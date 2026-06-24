@@ -33,6 +33,7 @@
 #include "zend_autoload.h"
 #include "zend_exceptions.h"
 #include "zend_interfaces.h"
+#include "zend_runtime_module.h"
 
 ZEND_TLS zend_string *spl_autoload_extensions;
 
@@ -40,7 +41,16 @@ ZEND_TLS zend_string *spl_autoload_extensions;
 
 static zend_class_entry * spl_find_ce_by_name(zend_string *name, bool autoload)
 {
-	zend_class_entry *ce = zend_lookup_class_ex(name, NULL, autoload ? 0 : ZEND_FETCH_CLASS_NO_AUTOLOAD);
+	zend_class_entry *ce;
+
+	if (!autoload) {
+		zend_string *lc_name = zend_string_tolower(name);
+
+		ce = zend_hash_find_ptr(RMG(class_table), lc_name);
+		zend_string_release(lc_name);
+	} else {
+		ce = zend_lookup_class(name);
+	}
 	if (ce == NULL) {
 		php_error_docref(NULL, E_WARNING, "Class %s does not exist%s", ZSTR_VAL(name), autoload ? " and could not be loaded" : "");
 		return NULL;
@@ -279,7 +289,7 @@ static bool spl_autoload(zend_string *lc_name, const char *ext, size_t ext_len) 
 		opened_path = zend_string_copy(file_handle.opened_path);
 		ZVAL_NULL(&dummy);
 		zend_op_array *new_op_array = NULL;
-		if (zend_hash_add(&EG(included_files), opened_path, &dummy)) {
+		if (zend_hash_add(RMG(included_files), opened_path, &dummy)) {
 			new_op_array = zend_compile_file(&file_handle, ZEND_REQUIRE);
 		}
 		zend_string_release_ex(opened_path, false);
@@ -294,7 +304,7 @@ static bool spl_autoload(zend_string *lc_name, const char *ext, size_t ext_len) 
 			efree(new_op_array);
 			zval_ptr_dtor(&result);
 
-			ret = zend_hash_exists(EG(class_table), lc_name);
+			ret = zend_hash_exists(RMG(class_table), lc_name);
 		}
 	}
 	zend_destroy_file_handle(&file_handle);

@@ -45,6 +45,7 @@ typedef struct _zend_constant {
 	zend_string *name;
 	zend_string *filename;
 	HashTable *attributes;
+	zend_runtime_module *runtime_module;
 } zend_constant;
 
 #define ZEND_CONSTANT_FLAGS(c) \

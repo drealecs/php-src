@@ -32,6 +32,8 @@
 #include "zend_frameless_function.h"
 #include "zend_property_hooks.h"
 
+typedef struct _zend_runtime_module zend_runtime_module;
+
 #define SET_UNUSED(op) do { \
 	op ## _type = IS_UNUSED; \
 	op.num = (uint32_t) -1; \
@@ -546,6 +548,7 @@ struct _zend_op_array {
 	uint32_t T;         /* number of temporary variables */
 	uint32_t fn_flags2;
 	const zend_property_info *prop_info; /* The corresponding prop_info if this is a hook. */
+	zend_runtime_module *runtime_module;
 	/* END of common elements */
 
 	uint32_t cache_size; /* number of run_time_cache_slots * sizeof(void*) */
@@ -606,6 +609,7 @@ typedef struct _zend_internal_function {
 	uint32_t T;         /* number of temporary variables */
 	uint32_t fn_flags2;
 	const zend_property_info *prop_info; /* The corresponding prop_info if this is a hook. */
+	zend_runtime_module *runtime_module;
 	/* END of common elements */
 
 	zif_handler handler;
@@ -636,6 +640,7 @@ union _zend_function {
 		uint32_t T;         /* number of temporary variables */
 		uint32_t fn_flags2;
 		const zend_property_info *prop_info; /* The corresponding prop_info if this is a hook. */
+		zend_runtime_module *runtime_module;
 	} common;
 
 	zend_op_array op_array;
@@ -648,6 +653,7 @@ struct _zend_execute_data {
 	zval                *return_value;
 	zend_function       *func;             /* executed function              */
 	zval                 This;             /* this + call_info + num_args    */
+	zend_runtime_module *runtime_module;
 	zend_execute_data   *prev_execute_data;
 	zend_array          *symbol_table;
 	void               **run_time_cache;   /* cache op_array->run_time_cache */

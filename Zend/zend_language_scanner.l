@@ -46,6 +46,7 @@
 #include "zend_strtod.h"
 #include "zend_exceptions.h"
 #include "zend_virtual_cwd.h"
+#include "zend_runtime_module.h"
 
 #define YYCTYPE   unsigned char
 #define YYFILL(n) { if ((YYCURSOR + n) >= (YYLIMIT + ZEND_MMAP_AHEAD)) { return 0; } }
@@ -720,7 +721,7 @@ zend_op_array *compile_filename(int type, zend_string *filename)
 			file_handle.opened_path = opened_path = zend_string_copy(filename);
 		}
 
-		zend_hash_add_empty_element(&EG(included_files), file_handle.opened_path);
+		zend_hash_add_empty_element(RMG(included_files), file_handle.opened_path);
 
 		if (opened_path) {
 			zend_string_release_ex(opened_path, 0);

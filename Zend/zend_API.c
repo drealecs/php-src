@@ -34,6 +34,7 @@
 #include "zend_enum.h"
 #include "zend_object_handlers.h"
 #include "zend_observer.h"
+#include "zend_runtime_module.h"
 
 #include <stdarg.h>
 
@@ -3052,6 +3053,7 @@ ZEND_API zend_result zend_register_functions(zend_class_entry *scope, const zend
 		internal_function->doc_comment = ptr->doc_comment ? zend_string_init_interned(ptr->doc_comment, strlen(ptr->doc_comment), 1) : NULL;
 		internal_function->function_name = zend_string_init_interned(ptr->fname, fname_len, 1);
 		internal_function->scope = scope;
+		internal_function->runtime_module = NULL;
 		internal_function->prototype = NULL;
 		internal_function->prop_info = NULL;
 		internal_function->attributes = NULL;
@@ -3161,6 +3163,9 @@ ZEND_API zend_result zend_register_functions(zend_class_entry *scope, const zend
 			free(reg_function);
 			zend_string_release(lowercase_name);
 			break;
+		}
+		if (!scope && target_function_table == CG(function_table)) {
+			zend_runtime_context_add_visible_internal_function(lowercase_name, (zend_function *) reg_function);
 		}
 		if (reg_function->frameless_function_infos) {
 			const zend_frameless_function_info *flf_info = reg_function->frameless_function_infos;
@@ -3278,6 +3283,9 @@ ZEND_API void zend_unregister_functions(const zend_function_entry *functions, in
 		lowercase_name = zend_string_alloc(fname_len, 0);
 		zend_str_tolower_copy(ZSTR_VAL(lowercase_name), ptr->fname, fname_len);
 		zend_hash_del(target_function_table, lowercase_name);
+		if (!function_table && target_function_table == CG(function_table)) {
+			zend_runtime_context_remove_visible_internal_function(lowercase_name);
+		}
 		zend_string_efree(lowercase_name);
 		ptr++;
 		i++;
@@ -3521,6 +3529,14 @@ static zend_class_entry *do_register_internal_class(const zend_class_entry *orig
 	lowercase_name = zend_string_tolower_ex(orig_class_entry->name, EG(current_module)->type == MODULE_PERSISTENT);
 	lowercase_name = zend_new_interned_string(lowercase_name);
 	zend_hash_update_ptr(CG(class_table), lowercase_name, class_entry);
+	if (EG(runtime_module_root_context)) {
+		zend_runtime_module *module;
+
+		zend_runtime_context_add_visible_class(zend_get_root_runtime_context(), lowercase_name, class_entry);
+		ZEND_HASH_MAP_FOREACH_PTR(&EG(runtime_modules), module) {
+			zend_runtime_context_add_visible_class(&module->context, lowercase_name, class_entry);
+		} ZEND_HASH_FOREACH_END();
+	}
 	zend_string_release_ex(lowercase_name, 1);
 
 	if (class_entry->__tostring && !zend_string_equals_literal(class_entry->name, "Stringable")
@@ -3597,6 +3613,9 @@ ZEND_API zend_class_entry *zend_register_internal_interface(const zend_class_ent
 
 ZEND_API zend_result zend_register_class_alias_ex(const char *name, size_t name_len, zend_class_entry *ce, bool persistent) /* {{{ */
 {
+	zend_runtime_module *runtime_module = NULL;
+	HashTable *class_table;
+	zend_runtime_module_symbol_conflict conflict;
 	zend_string *lcname;
 	zval zv, *ret;
 
@@ -3623,15 +3642,48 @@ ZEND_API zend_result zend_register_class_alias_ex(const char *name, size_t name_
 	 */
 	ZVAL_ALIAS_PTR(&zv, ce);
 
-	ret = zend_hash_add(CG(class_table), lcname, &zv);
-	zend_string_release_ex(lcname, 0);
+	if (!persistent) {
+		runtime_module = zend_get_current_runtime_module();
+	}
+	if (!persistent && zend_runtime_module_check_symbol_declaration(runtime_module,
+				ZEND_RUNTIME_MODULE_SYMBOL_CLASS, lcname, &conflict)) {
+		if (runtime_module) {
+			if (conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_INTERNAL) {
+				zend_throw_error(NULL,
+					"Cannot declare class alias %s in runtime module \"%s\": name conflicts with an internal/builtin symbol",
+					ZSTR_VAL(lcname), ZSTR_VAL(runtime_module->name));
+			} else if (conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_ROOT) {
+				zend_throw_error(NULL,
+					"Cannot declare class alias %s in runtime module \"%s\": name conflicts with the root context",
+					ZSTR_VAL(lcname), ZSTR_VAL(runtime_module->name));
+			} else {
+				zend_throw_error(NULL,
+					"Cannot declare class alias %s in runtime module \"%s\": name conflicts with runtime module \"%s\"",
+					ZSTR_VAL(lcname), ZSTR_VAL(runtime_module->name), ZSTR_VAL(conflict.module->name));
+			}
+		} else {
+			ZEND_ASSERT(conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_MODULE);
+			zend_throw_error(NULL,
+				"Cannot declare class alias %s: name conflicts with runtime module \"%s\"",
+				ZSTR_VAL(lcname), ZSTR_VAL(conflict.module->name));
+		}
+		zend_string_release_ex(lcname, 0);
+		return FAILURE;
+	}
+	class_table = persistent ? CG(class_table) : RMG(declared_class_table);
+	ret = zend_hash_add(class_table, lcname, &zv);
 	if (ret) {
+		if (!persistent) {
+			zend_runtime_module_add_visible_class(runtime_module, lcname, ce);
+		}
+		zend_string_release_ex(lcname, 0);
 		// avoid notifying at MINIT time
 		if (ce->type == ZEND_USER_CLASS) {
 			zend_observer_class_linked_notify(ce, lcname);
 		}
 		return SUCCESS;
 	}
+	zend_string_release_ex(lcname, 0);
 	return FAILURE;
 }
 /* }}} */
@@ -3868,24 +3920,7 @@ static zend_always_inline bool zend_is_callable_check_func(const zval *callable,
 		}
 
 		cname = zend_string_init_interned(Z_STRVAL_P(callable), clen, 0);
-		if (ZSTR_HAS_CE_CACHE(cname) && ZSTR_GET_CE_CACHE(cname)) {
-			fcc->calling_scope = ZSTR_GET_CE_CACHE(cname);
-			if (scope && !fcc->object) {
-				zend_object *object = zend_get_this_object(frame);
-
-				if (object &&
-				    instanceof_function(object->ce, scope) &&
-				    instanceof_function(scope, fcc->calling_scope)) {
-					fcc->object = object;
-					fcc->called_scope = object->ce;
-				} else {
-					fcc->called_scope = fcc->calling_scope;
-				}
-			} else {
-				fcc->called_scope = fcc->object ? fcc->object->ce : fcc->calling_scope;
-			}
-			strict_class = true;
-		} else if (!zend_is_callable_check_class(cname, scope, frame, fcc, &strict_class, error, suppress_deprecation || ce_org != NULL)) {
+		if (!zend_is_callable_check_class(cname, scope, frame, fcc, &strict_class, error, suppress_deprecation || ce_org != NULL)) {
 			zend_string_release_ex(cname, 0);
 			return 0;
 		}

@@ -30,6 +30,7 @@
 #include "zend_closures.h"
 #include "zend_generators.h"
 #include "zend_autoload.h"
+#include "zend_runtime_module.h"
 #include "zend_builtin_functions_arginfo.h"
 #include "zend_smart_str.h"
 
@@ -38,7 +39,6 @@
 ZEND_MINIT_FUNCTION(core) { /* {{{ */
 	zend_autoload = zend_perform_class_autoload;
 	zend_register_default_classes();
-
 	zend_standard_class_def = register_class_stdClass();
 
 	return SUCCESS;
@@ -70,6 +70,108 @@ zend_result zend_startup_builtin_functions(void) /* {{{ */
 	return SUCCESS;
 }
 /* }}} */
+
+ZEND_FUNCTION(module_add_dependency)
+{
+	zend_string *dependency_name;
+	zend_runtime_context *context = zend_get_current_runtime_context();
+	zend_runtime_module *module = zend_get_current_runtime_module();
+	zend_runtime_module *dependency;
+	HashTable *dependencies = context->dependencies;
+	zend_runtime_module_symbol_kind conflict_kind;
+	zend_runtime_module_symbol_conflict conflict;
+	zend_string *conflict_key;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_STR(dependency_name)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (ZSTR_LEN(dependency_name) == 0) {
+		zend_argument_value_error(1, "must not be empty");
+		RETURN_THROWS();
+	}
+
+	dependency = zend_runtime_module_get_or_create(dependency_name);
+
+	if (module == dependency) {
+		RETURN_NULL();
+	}
+	if (zend_hash_exists(dependencies, dependency->name)) {
+		RETURN_NULL();
+	}
+
+	if (zend_runtime_module_check_dependency_symbols(module, dependency,
+				&conflict_kind, &conflict_key, &conflict)) {
+		if (conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_INTERNAL) {
+			zend_throw_error(NULL,
+				"Cannot add dependency \"%s\" to %s%s%s: %s name \"%s\" conflicts with an internal/builtin symbol",
+				ZSTR_VAL(dependency->name), module ? "runtime module \"" : "the root context",
+				module ? ZSTR_VAL(module->name) : "", module ? "\"" : "",
+				zend_runtime_module_symbol_kind_name(conflict_kind), ZSTR_VAL(conflict_key));
+		} else if (conflict.source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_ROOT) {
+			zend_throw_error(NULL,
+				"Cannot add dependency \"%s\" to %s%s%s: %s name \"%s\" conflicts with the root context",
+				ZSTR_VAL(dependency->name), module ? "runtime module \"" : "the root context",
+				module ? ZSTR_VAL(module->name) : "", module ? "\"" : "",
+				zend_runtime_module_symbol_kind_name(conflict_kind), ZSTR_VAL(conflict_key));
+		} else {
+			zend_throw_error(NULL,
+				"Cannot add dependency \"%s\" to %s%s%s: %s name \"%s\" conflicts with runtime module \"%s\"",
+				ZSTR_VAL(dependency->name), module ? "runtime module \"" : "the root context",
+				module ? ZSTR_VAL(module->name) : "", module ? "\"" : "",
+				zend_runtime_module_symbol_kind_name(conflict_kind), ZSTR_VAL(conflict_key),
+				ZSTR_VAL(conflict.module->name));
+		}
+		RETURN_THROWS();
+	}
+
+	zend_hash_add_new_ptr(dependencies, dependency->name, dependency);
+	if (module) {
+		zend_hash_add_ptr(&dependency->dependants, module->name, module);
+	}
+	zend_runtime_context_import_dependency_classes(context, dependency);
+	zend_runtime_context_import_dependency_functions(context, dependency);
+	zend_runtime_context_import_dependency_constants(context, dependency);
+}
+
+ZEND_FUNCTION(module_run)
+{
+	zend_string *module_name;
+	zend_object *callback_obj;
+	zend_runtime_module *module;
+	zval callback;
+	zval *this_ptr;
+	zend_function *callback_func;
+	zend_fcall_info_cache fcc;
+	zend_runtime_module *previous_override;
+
+	ZEND_PARSE_PARAMETERS_START(2, 2)
+		Z_PARAM_STR(module_name)
+		Z_PARAM_OBJ_OF_CLASS(callback_obj, zend_ce_closure)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (ZSTR_LEN(module_name) == 0) {
+		zend_argument_value_error(1, "must not be empty");
+		RETURN_THROWS();
+	}
+	module = zend_runtime_module_get_or_create(module_name);
+
+	ZVAL_OBJ(&callback, callback_obj);
+	this_ptr = zend_get_closure_this_ptr(&callback);
+	callback_func = (zend_function *) zend_get_closure_method_def(callback_obj);
+	fcc = (zend_fcall_info_cache) {
+		.function_handler = callback_func,
+		.calling_scope = callback_func->common.scope,
+		.called_scope = Z_TYPE_P(this_ptr) == IS_OBJECT ? Z_OBJCE_P(this_ptr) : callback_func->common.scope,
+		.object = Z_TYPE_P(this_ptr) == IS_OBJECT ? Z_OBJ_P(this_ptr) : NULL,
+		.closure = callback_obj,
+	};
+
+	previous_override = EG(runtime_module_override);
+	zend_set_runtime_module_override(module);
+	zend_call_known_fcc(&fcc, return_value, 0, NULL, NULL);
+	zend_set_runtime_module_override(previous_override);
+}
 
 ZEND_FUNCTION(clone)
 {
@@ -682,6 +784,7 @@ static void is_a_impl(INTERNAL_FUNCTION_PARAMETERS, bool only_subclass) /* {{{ *
 	zval *obj;
 	zend_string *class_name;
 	const zend_class_entry *instance_ce;
+	zend_runtime_module *runtime_module;
 	bool allow_string = only_subclass;
 
 	ZEND_PARSE_PARAMETERS_START(2, 3)
@@ -708,7 +811,10 @@ static void is_a_impl(INTERNAL_FUNCTION_PARAMETERS, bool only_subclass) /* {{{ *
 		RETURN_FALSE;
 	}
 
-	if (!only_subclass && EXPECTED(zend_string_equals(instance_ce->name, class_name))) {
+	runtime_module = zend_get_current_runtime_module();
+	if (!only_subclass
+			&& instance_ce->runtime_module == runtime_module
+			&& EXPECTED(zend_string_equals(instance_ce->name, class_name))) {
 		RETURN_TRUE;
 	}
 
@@ -1076,13 +1182,6 @@ static zend_always_inline void _class_exists_impl(zval *return_value, zend_strin
 	zend_string *lcname;
 	const zend_class_entry *ce;
 
-	if (ZSTR_HAS_CE_CACHE(name)) {
-		ce = ZSTR_GET_CE_CACHE(name);
-		if (ce) {
-			RETURN_BOOL(((ce->ce_flags & flags) == flags) && !(ce->ce_flags & skip_flags));
-		}
-	}
-
 	if (!autoload) {
 		if (ZSTR_VAL(name)[0] == '\\') {
 			/* Ignore leading "\" */
@@ -1092,7 +1191,7 @@ static zend_always_inline void _class_exists_impl(zval *return_value, zend_strin
 			lcname = zend_string_tolower(name);
 		}
 
-		ce = zend_hash_find_ptr(EG(class_table), lcname);
+		ce = zend_hash_find_ptr(RMG(class_table), lcname);
 		zend_string_release_ex(lcname, 0);
 	} else {
 		ce = zend_lookup_class(name);
@@ -1189,8 +1288,11 @@ ZEND_FUNCTION(function_exists)
 		lcname = zend_string_tolower(name);
 	}
 
-	exists = zend_hash_exists(EG(function_table), lcname);
+	exists = zend_fetch_function(lcname) != NULL;
 	zend_string_release_ex(lcname, 0);
+	if (EG(exception)) {
+		RETURN_THROWS();
+	}
 
 	RETURN_BOOL(exists);
 }
@@ -1216,6 +1318,8 @@ ZEND_FUNCTION(class_alias)
 	if (ce) {
 		if (zend_register_class_alias_ex(ZSTR_VAL(alias_name), ZSTR_LEN(alias_name), ce, false) == SUCCESS) {
 			RETURN_TRUE;
+		} else if (EG(exception)) {
+			RETURN_THROWS();
 		} else {
 			zend_class_redeclaration_error_ex(E_WARNING, alias_name, ce);
 			RETURN_FALSE;
@@ -1230,12 +1334,14 @@ ZEND_FUNCTION(class_alias)
 /* {{{ Returns an array with the file names that were include_once()'d */
 ZEND_FUNCTION(get_included_files)
 {
+	HashTable *included_files;
 	zend_string *entry;
 
 	ZEND_PARSE_PARAMETERS_NONE();
 
 	array_init(return_value);
-	ZEND_HASH_MAP_FOREACH_STR_KEY(&EG(included_files), entry) {
+	included_files = RMG(included_files);
+	ZEND_HASH_MAP_FOREACH_STR_KEY(included_files, entry) {
 		if (entry) {
 			add_next_index_str(return_value, zend_string_copy(entry));
 		}
@@ -1400,21 +1506,114 @@ ZEND_FUNCTION(get_exception_handler)
 	}
 }
 
+static zend_always_inline bool zend_declared_class_entry_matches(zend_string *key, zval *zv, int flags)
+{
+	const zend_class_entry *ce;
+
+	if (!key || ZSTR_VAL(key)[0] == 0) {
+		return false;
+	}
+
+	ce = Z_PTR_P(zv);
+	return (ce->ce_flags & (ZEND_ACC_LINKED|ZEND_ACC_INTERFACE|ZEND_ACC_TRAIT)) == flags;
+}
+
+static void zend_add_declared_class_name(HashTable *target, zend_string *key, zval *zv, int flags, bool overwrite)
+{
+	const zend_class_entry *ce;
+	zval name;
+
+	if (!zend_declared_class_entry_matches(key, zv, flags)) {
+		return;
+	}
+
+	ce = Z_PTR_P(zv);
+	if (EXPECTED(Z_TYPE_P(zv) == IS_PTR)) {
+		ZVAL_STR_COPY(&name, ce->name);
+	} else {
+		ZEND_ASSERT(Z_TYPE_P(zv) == IS_ALIAS_PTR);
+		ZVAL_STR_COPY(&name, key);
+	}
+
+	if (overwrite) {
+		zend_hash_update(target, key, &name);
+	} else if (!zend_hash_add(target, key, &name)) {
+		zval_ptr_dtor(&name);
+	}
+}
+
 static inline void get_declared_class_impl(INTERNAL_FUNCTION_PARAMETERS, int flags) /* {{{ */
 {
+	zend_runtime_module *runtime_module;
+	zend_runtime_context *context;
 	zend_string *key;
 	zval *zv;
 
 	ZEND_PARSE_PARAMETERS_NONE();
 
 	array_init(return_value);
+	runtime_module = zend_get_current_runtime_module();
+	context = zend_runtime_module_context(runtime_module);
+	if (zend_runtime_context_is_module_sensitive(context)) {
+		HashTable declared_classes;
+		HashTable dependency_classes;
+		HashTable ambiguous_classes;
+		zend_runtime_module *dependency;
+
+		zend_hash_init(&declared_classes, 8, NULL, ZVAL_PTR_DTOR, 0);
+		ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(EG(class_table), key, zv) {
+			zend_class_entry *ce = Z_PTR_P(zv);
+			if (!runtime_module || ce->type == ZEND_INTERNAL_CLASS) {
+				zend_add_declared_class_name(&declared_classes, key, zv, flags, false);
+			}
+		} ZEND_HASH_FOREACH_END();
+
+		if (runtime_module) {
+			ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(context->declared_class_table, key, zv) {
+				zend_add_declared_class_name(&declared_classes, key, zv, flags, true);
+			} ZEND_HASH_FOREACH_END();
+		}
+
+		zend_hash_init(&dependency_classes, 8, NULL, NULL, 0);
+		zend_hash_init(&ambiguous_classes, 8, NULL, NULL, 0);
+		ZEND_HASH_FOREACH_PTR(context->dependencies, dependency) {
+			ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(&dependency->declared_class_table, key, zv) {
+				zval *existing;
+
+				if (!zend_declared_class_entry_matches(key, zv, flags)
+						|| zend_hash_exists(&declared_classes, key)
+						|| zend_hash_exists(&ambiguous_classes, key)) {
+					continue;
+				}
+
+				existing = zend_hash_find_ptr(&dependency_classes, key);
+				if (existing && Z_PTR_P(existing) != Z_PTR_P(zv)) {
+					zend_hash_del(&dependency_classes, key);
+					zend_hash_add_empty_element(&ambiguous_classes, key);
+				} else if (!existing) {
+					zend_hash_add_ptr(&dependency_classes, key, zv);
+				}
+			} ZEND_HASH_FOREACH_END();
+		} ZEND_HASH_FOREACH_END();
+
+		ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(&dependency_classes, key, zv) {
+			zend_add_declared_class_name(&declared_classes, key, zv, flags, false);
+		} ZEND_HASH_FOREACH_END();
+		zend_hash_destroy(&ambiguous_classes);
+		zend_hash_destroy(&dependency_classes);
+
+		ZEND_HASH_FOREACH_VAL(&declared_classes, zv) {
+			add_next_index_str(return_value, zend_string_copy(Z_STR_P(zv)));
+		} ZEND_HASH_FOREACH_END();
+		zend_hash_destroy(&declared_classes);
+		return;
+	}
+
 	zend_hash_real_init_packed(Z_ARRVAL_P(return_value));
 	ZEND_HASH_FILL_PACKED(Z_ARRVAL_P(return_value)) {
 		ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(EG(class_table), key, zv) {
-			const zend_class_entry *ce = Z_PTR_P(zv);
-			if ((ce->ce_flags & (ZEND_ACC_LINKED|ZEND_ACC_INTERFACE|ZEND_ACC_TRAIT)) == flags
-			 && key
-			 && ZSTR_VAL(key)[0] != 0) {
+			if (zend_declared_class_entry_matches(key, zv, flags)) {
+				const zend_class_entry *ce = Z_PTR_P(zv);
 				ZEND_HASH_FILL_GROW();
 				if (EXPECTED(Z_TYPE_P(zv) == IS_PTR)) {
 					ZEND_HASH_FILL_SET_STR_COPY(ce->name);
@@ -1451,8 +1650,28 @@ ZEND_FUNCTION(get_declared_interfaces)
 /* }}} */
 
 /* {{{ Returns an array of all defined functions */
+static zend_always_inline bool zend_defined_function_entry_matches(zend_string *key)
+{
+	return key && ZSTR_VAL(key)[0] != 0;
+}
+
+static void zend_add_defined_function_name(HashTable *target, zend_string *key, zend_function *func, bool overwrite)
+{
+	if (!zend_defined_function_entry_matches(key)) {
+		return;
+	}
+
+	if (overwrite) {
+		zend_hash_update_ptr(target, key, func);
+	} else {
+		zend_hash_add_ptr(target, key, func);
+	}
+}
+
 ZEND_FUNCTION(get_defined_functions)
 {
+	zend_runtime_module *runtime_module;
+	zend_runtime_context *context;
 	zval internal, user;
 	zend_string *key;
 	zend_function *func;
@@ -1470,9 +1689,72 @@ ZEND_FUNCTION(get_defined_functions)
 	array_init(&internal);
 	array_init(&user);
 	array_init(return_value);
+	runtime_module = zend_get_current_runtime_module();
+	context = zend_runtime_module_context(runtime_module);
+
+	if (zend_runtime_context_is_module_sensitive(context)) {
+		HashTable visible_functions;
+		HashTable dependency_functions;
+		HashTable ambiguous_functions;
+		zend_runtime_module *dependency;
+
+		zend_hash_init(&visible_functions, 8, NULL, NULL, 0);
+		ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(EG(function_table), key, func) {
+			if (!runtime_module || func->type == ZEND_INTERNAL_FUNCTION) {
+				zend_add_defined_function_name(&visible_functions, key, func, false);
+			}
+		} ZEND_HASH_FOREACH_END();
+
+		if (runtime_module) {
+			ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(context->declared_function_table, key, func) {
+				zend_add_defined_function_name(&visible_functions, key, func, true);
+			} ZEND_HASH_FOREACH_END();
+		}
+
+		zend_hash_init(&dependency_functions, 8, NULL, NULL, 0);
+		zend_hash_init(&ambiguous_functions, 8, NULL, NULL, 0);
+		ZEND_HASH_FOREACH_PTR(context->dependencies, dependency) {
+			ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(&dependency->declared_function_table, key, func) {
+				zend_function *existing;
+
+				if (!zend_defined_function_entry_matches(key)
+						|| zend_hash_exists(&visible_functions, key)
+						|| zend_hash_exists(&ambiguous_functions, key)) {
+					continue;
+				}
+
+				existing = zend_hash_find_ptr(&dependency_functions, key);
+				if (existing && existing != func) {
+					zend_hash_del(&dependency_functions, key);
+					zend_hash_add_empty_element(&ambiguous_functions, key);
+				} else if (!existing) {
+					zend_hash_add_ptr(&dependency_functions, key, func);
+				}
+			} ZEND_HASH_FOREACH_END();
+		} ZEND_HASH_FOREACH_END();
+
+		ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(&dependency_functions, key, func) {
+			zend_add_defined_function_name(&visible_functions, key, func, false);
+		} ZEND_HASH_FOREACH_END();
+		zend_hash_destroy(&ambiguous_functions);
+		zend_hash_destroy(&dependency_functions);
+
+		ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(&visible_functions, key, func) {
+			if (func->type == ZEND_INTERNAL_FUNCTION) {
+				add_next_index_str(&internal, zend_string_copy(key));
+			} else if (func->type == ZEND_USER_FUNCTION) {
+				add_next_index_str(&user, zend_string_copy(key));
+			}
+		} ZEND_HASH_FOREACH_END();
+		zend_hash_destroy(&visible_functions);
+
+		zend_hash_str_add_new(Z_ARRVAL_P(return_value), "internal", sizeof("internal")-1, &internal);
+		zend_hash_add_new(Z_ARRVAL_P(return_value), ZSTR_KNOWN(ZEND_STR_USER), &user);
+		return;
+	}
 
 	ZEND_HASH_MAP_FOREACH_STR_KEY_PTR(EG(function_table), key, func) {
-		if (key && ZSTR_VAL(key)[0] != 0) {
+		if (zend_defined_function_entry_matches(key)) {
 			if (func->type == ZEND_INTERNAL_FUNCTION) {
 				add_next_index_str(&internal, zend_string_copy(key));
 			} else if (func->type == ZEND_USER_FUNCTION) {
@@ -1624,16 +1906,36 @@ ZEND_FUNCTION(get_loaded_extensions)
 }
 /* }}} */
 
+static void zend_add_constant_to_array(HashTable *target, const zend_constant *constant, bool overwrite)
+{
+	zval const_val;
+
+	if (!constant->name) {
+		return;
+	}
+
+	ZVAL_COPY_OR_DUP(&const_val, &constant->value);
+	if (overwrite) {
+		zend_hash_update(target, constant->name, &const_val);
+	} else if (!zend_hash_add(target, constant->name, &const_val)) {
+		zval_ptr_dtor(&const_val);
+	}
+}
+
 /* {{{ Return an array containing the names and values of all defined constants */
 ZEND_FUNCTION(get_defined_constants)
 {
 	bool categorize = false;
+	zend_runtime_module *runtime_module;
+	zend_runtime_context *context;
 
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|b", &categorize) == FAILURE) {
 		RETURN_THROWS();
 	}
 
 	array_init(return_value);
+	runtime_module = zend_get_current_runtime_module();
+	context = zend_runtime_module_context(runtime_module);
 
 	if (categorize) {
 		zend_constant *val;
@@ -1667,6 +1969,9 @@ ZEND_FUNCTION(get_defined_constants)
 			} else {
 				module_number = ZEND_CONSTANT_MODULE_NUMBER(val);
 			}
+			if (runtime_module && module_number == i) {
+				continue;
+			}
 
 			if (Z_TYPE(modules[module_number]) == IS_UNDEF) {
 				array_init(&modules[module_number]);
@@ -1677,20 +1982,119 @@ ZEND_FUNCTION(get_defined_constants)
 			zend_hash_add_new(Z_ARRVAL(modules[module_number]), val->name, &const_val);
 		} ZEND_HASH_FOREACH_END();
 
+		if (zend_runtime_context_is_module_sensitive(context)) {
+			zend_constant *constant;
+			HashTable dependency_constants;
+			HashTable ambiguous_constants;
+			zend_runtime_module *dependency;
+
+			if (Z_TYPE(modules[i]) == IS_UNDEF) {
+				array_init(&modules[i]);
+				add_assoc_zval(return_value, module_names[i], &modules[i]);
+			}
+
+			if (runtime_module) {
+				ZEND_HASH_MAP_FOREACH_PTR(context->declared_constants_table, constant) {
+					zend_add_constant_to_array(Z_ARRVAL(modules[i]), constant, true);
+				} ZEND_HASH_FOREACH_END();
+			}
+
+			zend_hash_init(&dependency_constants, 8, NULL, NULL, 0);
+			zend_hash_init(&ambiguous_constants, 8, NULL, NULL, 0);
+			ZEND_HASH_FOREACH_PTR(context->dependencies, dependency) {
+				ZEND_HASH_MAP_FOREACH_PTR(&dependency->declared_constants_table, constant) {
+					zend_constant *existing;
+					zend_runtime_module_symbol_conflict_source global_source;
+
+					global_source = constant->name
+						? zend_runtime_module_global_symbol_source(ZEND_RUNTIME_MODULE_SYMBOL_CONSTANT, constant->name)
+						: ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_NONE;
+
+					if (!constant->name
+							|| global_source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_INTERNAL
+							|| (!runtime_module && global_source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_ROOT)
+							|| (runtime_module && zend_hash_exists(context->declared_constants_table, constant->name))
+							|| zend_hash_exists(&ambiguous_constants, constant->name)) {
+						continue;
+					}
+
+					existing = zend_hash_find_ptr(&dependency_constants, constant->name);
+					if (existing && existing != constant) {
+						zend_hash_del(&dependency_constants, constant->name);
+						zend_hash_add_empty_element(&ambiguous_constants, constant->name);
+						continue;
+					}
+
+					zend_hash_add_ptr(&dependency_constants, constant->name, constant);
+				} ZEND_HASH_FOREACH_END();
+			} ZEND_HASH_FOREACH_END();
+
+			ZEND_HASH_MAP_FOREACH_PTR(&dependency_constants, constant) {
+				zend_add_constant_to_array(Z_ARRVAL(modules[i]), constant, false);
+			} ZEND_HASH_FOREACH_END();
+
+			zend_hash_destroy(&ambiguous_constants);
+			zend_hash_destroy(&dependency_constants);
+		}
+
 		efree(module_names);
 		efree(modules);
 	} else {
 		zend_constant *constant;
-		zval const_val;
 
 		ZEND_HASH_MAP_FOREACH_PTR(EG(zend_constants), constant) {
-			if (!constant->name) {
-				/* skip special constants */
+			if (runtime_module && ZEND_CONSTANT_MODULE_NUMBER(constant) == PHP_USER_CONSTANT) {
 				continue;
 			}
-			ZVAL_COPY_OR_DUP(&const_val, &constant->value);
-			zend_hash_add_new(Z_ARRVAL_P(return_value), constant->name, &const_val);
+			zend_add_constant_to_array(Z_ARRVAL_P(return_value), constant, false);
 		} ZEND_HASH_FOREACH_END();
+
+		if (zend_runtime_context_is_module_sensitive(context)) {
+			HashTable dependency_constants;
+			HashTable ambiguous_constants;
+			zend_runtime_module *dependency;
+
+			if (runtime_module) {
+				ZEND_HASH_MAP_FOREACH_PTR(context->declared_constants_table, constant) {
+					zend_add_constant_to_array(Z_ARRVAL_P(return_value), constant, true);
+				} ZEND_HASH_FOREACH_END();
+			}
+
+			zend_hash_init(&dependency_constants, 8, NULL, NULL, 0);
+			zend_hash_init(&ambiguous_constants, 8, NULL, NULL, 0);
+			ZEND_HASH_FOREACH_PTR(context->dependencies, dependency) {
+				ZEND_HASH_MAP_FOREACH_PTR(&dependency->declared_constants_table, constant) {
+					zend_constant *existing;
+					zend_runtime_module_symbol_conflict_source global_source;
+
+					global_source = constant->name
+						? zend_runtime_module_global_symbol_source(ZEND_RUNTIME_MODULE_SYMBOL_CONSTANT, constant->name)
+						: ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_NONE;
+
+					if (!constant->name
+							|| global_source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_INTERNAL
+							|| (!runtime_module && global_source == ZEND_RUNTIME_MODULE_SYMBOL_CONFLICT_ROOT)
+							|| (runtime_module && zend_hash_exists(context->declared_constants_table, constant->name))
+							|| zend_hash_exists(&ambiguous_constants, constant->name)) {
+						continue;
+					}
+
+					existing = zend_hash_find_ptr(&dependency_constants, constant->name);
+					if (existing && existing != constant) {
+						zend_hash_del(&dependency_constants, constant->name);
+						zend_hash_add_empty_element(&ambiguous_constants, constant->name);
+					} else if (!existing) {
+						zend_hash_add_ptr(&dependency_constants, constant->name, (void *) constant);
+					}
+				} ZEND_HASH_FOREACH_END();
+			} ZEND_HASH_FOREACH_END();
+
+			ZEND_HASH_MAP_FOREACH_PTR(&dependency_constants, constant) {
+				zend_add_constant_to_array(Z_ARRVAL_P(return_value), constant, false);
+			} ZEND_HASH_FOREACH_END();
+			zend_hash_destroy(&ambiguous_constants);
+			zend_hash_destroy(&dependency_constants);
+		}
 	}
 }
 /* }}} */

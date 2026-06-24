@@ -32,6 +32,7 @@ static zend_always_inline void zend_do_inheritance(zend_class_entry *ce, zend_cl
 }
 
 ZEND_API zend_class_entry *zend_do_link_class(zend_class_entry *ce, zend_string *lc_parent_name, const zend_string *key);
+ZEND_API zend_class_entry *zend_clone_class_for_runtime_module(const zend_class_entry *pce, zend_runtime_module *runtime_module);
 
 void zend_verify_abstract_class(zend_class_entry *ce);
 void zend_build_properties_info_table(zend_class_entry *ce);

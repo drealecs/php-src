@@ -30,6 +30,8 @@
 #include "zend_exceptions.h"
 #include "zend_closures.h"
 #include "zend_generators.h"
+#include "zend_runtime_module.h"
+#include "zend_autoload.h"
 #include "zend_vm.h"
 #include "zend_float.h"
 #include "zend_fibers.h"
@@ -143,6 +145,11 @@ void init_executor(void) /* {{{ */
 
 	EG(function_table) = CG(function_table);
 	EG(class_table) = CG(class_table);
+	zend_hash_init(&EG(runtime_modules), 8, NULL, zend_runtime_module_ptr_dtor, 0);
+	zend_hash_init(&EG(runtime_module_root_dependencies), 4, NULL, NULL, 0);
+	EG(runtime_module_root_context) = NULL;
+	EG(current_runtime_module) = NULL;
+	EG(runtime_module_override) = NULL;
 
 	EG(error_handling) = EH_NORMAL;
 	EG(flags) = EG_FLAGS_INITIAL;
@@ -154,6 +161,7 @@ void init_executor(void) /* {{{ */
 	zend_llist_apply(&zend_extensions, (llist_apply_func_t) zend_extension_activator);
 
 	zend_hash_init(&EG(included_files), 8, NULL, NULL, 0);
+	zend_runtime_context_init_root();
 	zend_hash_init(&EG(autoload_current_classnames), 8, NULL, NULL, 0);
 
 	EG(ticks_count) = 0;
@@ -266,6 +274,123 @@ void shutdown_destructors(void) /* {{{ */
 }
 /* }}} */
 
+static void zend_cleanup_function_table_static_variables(HashTable *function_table)
+{
+	zval *zv;
+
+	ZEND_HASH_MAP_REVERSE_FOREACH_VAL(function_table, zv) {
+		zend_op_array *op_array = Z_PTR_P(zv);
+		if (op_array->type == ZEND_INTERNAL_FUNCTION) {
+			continue;
+		}
+		if (ZEND_MAP_PTR(op_array->static_variables_ptr)) {
+			HashTable *ht = ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
+			if (ht) {
+				zend_array_destroy(ht);
+				ZEND_MAP_PTR_SET(op_array->static_variables_ptr, NULL);
+			}
+		}
+	} ZEND_HASH_FOREACH_END();
+}
+
+static void zend_cleanup_class_table_static_data(HashTable *class_table)
+{
+	zval *zv;
+
+	ZEND_HASH_MAP_REVERSE_FOREACH_VAL(class_table, zv) {
+		zend_class_entry *ce = Z_PTR_P(zv);
+
+		if (ce->default_static_members_count) {
+			zend_cleanup_internal_class_data(ce);
+		}
+
+		if (ZEND_MAP_PTR(ce->mutable_data)) {
+			if (ZEND_MAP_PTR_GET_IMM(ce->mutable_data)) {
+				zend_cleanup_mutable_class_data(ce);
+			}
+		} else if (ce->type == ZEND_USER_CLASS && !(ce->ce_flags & ZEND_ACC_IMMUTABLE)) {
+			zend_class_constant *c;
+
+			ZEND_HASH_MAP_FOREACH_PTR(&ce->constants_table, c) {
+				if (c->ce == ce) {
+					zval_ptr_dtor_nogc(&c->value);
+					ZVAL_UNDEF(&c->value);
+				}
+			} ZEND_HASH_FOREACH_END();
+
+			if (ce->default_properties_table) {
+				zval *p = ce->default_properties_table;
+				zval *end = p + ce->default_properties_count;
+
+				while (p != end) {
+					i_zval_ptr_dtor(p);
+					ZVAL_UNDEF(p);
+					p++;
+				}
+			}
+		}
+
+		if (ce->type == ZEND_USER_CLASS && ce->backed_enum_table) {
+			ZEND_ASSERT(!(ce->ce_flags & ZEND_ACC_IMMUTABLE));
+			zend_hash_release(ce->backed_enum_table);
+			ce->backed_enum_table = NULL;
+		}
+
+		if (ce->ce_flags & ZEND_HAS_STATIC_IN_METHODS) {
+			zend_op_array *op_array;
+			ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, op_array) {
+				if (op_array->type == ZEND_USER_FUNCTION) {
+					if (ZEND_MAP_PTR(op_array->static_variables_ptr)) {
+						HashTable *ht = ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
+						if (ht) {
+							zend_array_destroy(ht);
+							ZEND_MAP_PTR_SET(op_array->static_variables_ptr, NULL);
+						}
+					}
+				}
+			} ZEND_HASH_FOREACH_END();
+
+			if (ce->num_hooked_props) {
+				zend_property_info *prop_info;
+				ZEND_HASH_MAP_FOREACH_PTR(&ce->properties_info, prop_info) {
+					if (prop_info->ce == ce) {
+						if (prop_info->hooks) {
+							for (uint32_t i = 0; i < ZEND_PROPERTY_HOOK_COUNT; i++) {
+								if (prop_info->hooks[i]) {
+									ZEND_ASSERT(ZEND_USER_CODE(prop_info->hooks[i]->type));
+									op_array = &prop_info->hooks[i]->op_array;
+									if (ZEND_MAP_PTR(op_array->static_variables_ptr)) {
+										HashTable *ht = ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
+										if (ht) {
+											zend_array_destroy(ht);
+											ZEND_MAP_PTR_SET(op_array->static_variables_ptr, NULL);
+										}
+									}
+								}
+							}
+						}
+					}
+				} ZEND_HASH_FOREACH_END();
+			}
+		}
+	} ZEND_HASH_FOREACH_END();
+}
+
+static void zend_cleanup_runtime_module_values(zend_runtime_module *module)
+{
+	zend_constant *constant;
+
+	zend_hash_clean(&module->autoload_functions);
+
+	ZEND_HASH_MAP_FOREACH_PTR(&module->declared_constants_table, constant) {
+		zval_ptr_dtor_nogc(&constant->value);
+		ZVAL_UNDEF(&constant->value);
+	} ZEND_HASH_FOREACH_END();
+
+	zend_cleanup_function_table_static_variables(&module->declared_function_table);
+	zend_cleanup_class_table_static_data(&module->declared_class_table);
+}
+
 /* Free values held by the executor. */
 ZEND_API void zend_shutdown_executor_values(bool fast_shutdown)
 {
@@ -276,6 +401,7 @@ ZEND_API void zend_shutdown_executor_values(bool fast_shutdown)
 	EG(active) = 0;
 
 	if (!fast_shutdown) {
+		zend_runtime_module *runtime_module;
 		zval *zv;
 
 		zend_hash_graceful_reverse_destroy(&EG(symbol_table));
@@ -310,96 +436,10 @@ ZEND_API void zend_shutdown_executor_values(bool fast_shutdown)
 
 		/* Release static properties and static variables prior to the final GC run,
 		 * as they may hold GC roots. */
-		ZEND_HASH_MAP_REVERSE_FOREACH_VAL(EG(function_table), zv) {
-			zend_op_array *op_array = Z_PTR_P(zv);
-			if (op_array->type == ZEND_INTERNAL_FUNCTION) {
-				break;
-			}
-			if (ZEND_MAP_PTR(op_array->static_variables_ptr)) {
-				HashTable *ht = ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
-				if (ht) {
-					zend_array_destroy(ht);
-					ZEND_MAP_PTR_SET(op_array->static_variables_ptr, NULL);
-				}
-			}
-		} ZEND_HASH_FOREACH_END();
-		ZEND_HASH_MAP_REVERSE_FOREACH_VAL(EG(class_table), zv) {
-			zend_class_entry *ce = Z_PTR_P(zv);
-
-			if (ce->default_static_members_count) {
-				zend_cleanup_internal_class_data(ce);
-			}
-
-			if (ZEND_MAP_PTR(ce->mutable_data)) {
-				if (ZEND_MAP_PTR_GET_IMM(ce->mutable_data)) {
-					zend_cleanup_mutable_class_data(ce);
-				}
-			} else if (ce->type == ZEND_USER_CLASS && !(ce->ce_flags & ZEND_ACC_IMMUTABLE)) {
-				/* Constants may contain objects, destroy the values before the object store. */
-				zend_class_constant *c;
-				ZEND_HASH_MAP_FOREACH_PTR(&ce->constants_table, c) {
-					if (c->ce == ce) {
-						zval_ptr_dtor_nogc(&c->value);
-						ZVAL_UNDEF(&c->value);
-					}
-				} ZEND_HASH_FOREACH_END();
-
-				/* properties may contain objects as well */
-				if (ce->default_properties_table) {
-					zval *p = ce->default_properties_table;
-					zval *end = p + ce->default_properties_count;
-
-					while (p != end) {
-						i_zval_ptr_dtor(p);
-						ZVAL_UNDEF(p);
-						p++;
-					}
-				}
-			}
-
-			if (ce->type == ZEND_USER_CLASS && ce->backed_enum_table) {
-				ZEND_ASSERT(!(ce->ce_flags & ZEND_ACC_IMMUTABLE));
-				zend_hash_release(ce->backed_enum_table);
-				ce->backed_enum_table = NULL;
-			}
-
-			if (ce->ce_flags & ZEND_HAS_STATIC_IN_METHODS) {
-				zend_op_array *op_array;
-				ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, op_array) {
-					if (op_array->type == ZEND_USER_FUNCTION) {
-						if (ZEND_MAP_PTR(op_array->static_variables_ptr)) {
-							HashTable *ht = ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
-							if (ht) {
-								zend_array_destroy(ht);
-								ZEND_MAP_PTR_SET(op_array->static_variables_ptr, NULL);
-							}
-						}
-					}
-				} ZEND_HASH_FOREACH_END();
-
-				if (ce->num_hooked_props) {
-					zend_property_info *prop_info;
-					ZEND_HASH_MAP_FOREACH_PTR(&ce->properties_info, prop_info) {
-						if (prop_info->ce == ce) {
-							if (prop_info->hooks) {
-								for (uint32_t i = 0; i < ZEND_PROPERTY_HOOK_COUNT; i++) {
-									if (prop_info->hooks[i]) {
-										ZEND_ASSERT(ZEND_USER_CODE(prop_info->hooks[i]->type));
-										op_array = &prop_info->hooks[i]->op_array;
-										if (ZEND_MAP_PTR(op_array->static_variables_ptr)) {
-											HashTable *ht = ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
-											if (ht) {
-												zend_array_destroy(ht);
-												ZEND_MAP_PTR_SET(op_array->static_variables_ptr, NULL);
-											}
-										}
-									}
-								}
-							}
-						}
-					} ZEND_HASH_FOREACH_END();
-				}
-			}
+		zend_cleanup_function_table_static_variables(EG(function_table));
+		zend_cleanup_class_table_static_data(EG(class_table));
+		ZEND_HASH_MAP_FOREACH_PTR(&EG(runtime_modules), runtime_module) {
+			zend_cleanup_runtime_module_values(runtime_module);
 		} ZEND_HASH_FOREACH_END();
 
 		/* Also release error and exception handlers, which may hold objects. */
@@ -429,6 +469,12 @@ ZEND_API void zend_shutdown_executor_values(bool fast_shutdown)
 	}
 
 	zend_objects_store_free_object_storage(&EG(objects_store), fast_shutdown);
+
+	zend_runtime_context_shutdown_root();
+	zend_hash_destroy(&EG(runtime_module_root_dependencies));
+	zend_hash_destroy(&EG(runtime_modules));
+	EG(current_runtime_module) = NULL;
+	EG(runtime_module_override) = NULL;
 }
 
 void shutdown_executor(void) /* {{{ */
@@ -1176,15 +1222,31 @@ ZEND_API bool zend_is_valid_class_name(const zend_string *name) {
 	return 1;
 }
 
-ZEND_API zend_class_entry *zend_lookup_class_ex(zend_string *name, zend_string *key, uint32_t flags) /* {{{ */
+static HashTable *zend_runtime_module_autoload_current_classnames(zend_runtime_module *runtime_module)
 {
+	if (!runtime_module) {
+		return &EG(autoload_current_classnames);
+	}
+
+	if (!runtime_module->autoload_current_classnames) {
+		ALLOC_HASHTABLE(runtime_module->autoload_current_classnames);
+		zend_hash_init(runtime_module->autoload_current_classnames, 8, NULL, NULL, 0);
+	}
+
+	return runtime_module->autoload_current_classnames;
+}
+
+ZEND_API zend_class_entry *zend_lookup_class_ex_in_runtime_module(zend_runtime_module *runtime_module, zend_string *name, zend_string *key, uint32_t flags) /* {{{ */
+{
+	zend_runtime_context *context = zend_runtime_module_context(runtime_module);
 	zend_class_entry *ce = NULL;
 	zval *zv;
 	zend_string *lc_name;
 	zend_string *autoload_name;
+	HashTable *autoload_current_classnames;
 	uint32_t ce_cache = 0;
 
-	if (ZSTR_HAS_CE_CACHE(name) && ZSTR_VALID_CE_CACHE(name)) {
+	if (!runtime_module && ZSTR_HAS_CE_CACHE(name) && ZSTR_VALID_CE_CACHE(name)) {
 		ce_cache = GC_REFCOUNT(name);
 		ce = GET_CE_CACHE(ce_cache);
 		if (EXPECTED(ce)) {
@@ -1207,12 +1269,11 @@ ZEND_API zend_class_entry *zend_lookup_class_ex(zend_string *name, zend_string *
 		}
 	}
 
-	zv = zend_hash_find(EG(class_table), lc_name);
+	zv = zend_hash_find(context->class_table, lc_name);
 	if (zv) {
-		if (!key) {
-			zend_string_release_ex(lc_name, 0);
-		}
 		ce = (zend_class_entry*)Z_PTR_P(zv);
+	}
+	if (ce) {
 		if (UNEXPECTED(!(ce->ce_flags & ZEND_ACC_LINKED))) {
 			if ((flags & ZEND_FETCH_CLASS_ALLOW_UNLINKED) ||
 				((flags & ZEND_FETCH_CLASS_ALLOW_NEARLY_LINKED) &&
@@ -1222,15 +1283,22 @@ ZEND_API zend_class_entry *zend_lookup_class_ex(zend_string *name, zend_string *
 					zend_hash_init(CG(unlinked_uses), 0, NULL, NULL, 0);
 				}
 				zend_hash_index_add_empty_element(CG(unlinked_uses), (zend_ulong)(uintptr_t)ce);
+				if (!key) {
+					zend_string_release_ex(lc_name, 0);
+				}
 				return ce;
+			}
+			if (!key) {
+				zend_string_release_ex(lc_name, 0);
 			}
 			return NULL;
 		}
-		/* Don't populate CE_CACHE for mutable classes during compilation.
-		 * The class may be freed while persisting. */
-		if (ce_cache &&
-				(!CG(in_compilation) || (ce->ce_flags & ZEND_ACC_IMMUTABLE))) {
+		if (ce_cache && !ce->runtime_module
+				&& (!CG(in_compilation) || (ce->ce_flags & ZEND_ACC_IMMUTABLE))) {
 			SET_CE_CACHE(ce_cache, ce);
+		}
+		if (!key) {
+			zend_string_release_ex(lc_name, 0);
 		}
 		return ce;
 	}
@@ -1256,7 +1324,8 @@ ZEND_API zend_class_entry *zend_lookup_class_ex(zend_string *name, zend_string *
 		return NULL;
 	}
 
-	if (zend_hash_add_empty_element(&EG(autoload_current_classnames), lc_name) == NULL) {
+	autoload_current_classnames = zend_runtime_module_autoload_current_classnames(runtime_module);
+	if (zend_hash_add_empty_element(autoload_current_classnames, lc_name) == NULL) {
 		if (!key) {
 			zend_string_release_ex(lc_name, 0);
 		}
@@ -1273,23 +1342,33 @@ ZEND_API zend_class_entry *zend_lookup_class_ex(zend_string *name, zend_string *
 	zend_long previous_lineno = EG(lineno_override);
 	EG(filename_override) = NULL;
 	EG(lineno_override) = -1;
-	ce = zend_autoload(autoload_name, lc_name);
+	if (runtime_module && zend_autoload == zend_perform_class_autoload) {
+		ce = zend_perform_class_autoload_in_runtime_module(runtime_module, autoload_name, lc_name);
+	} else {
+		ce = zend_autoload(autoload_name, lc_name);
+	}
 	EG(filename_override) = previous_filename;
 	EG(lineno_override) = previous_lineno;
 
 	zend_string_release_ex(autoload_name, 0);
-	zend_hash_del(&EG(autoload_current_classnames), lc_name);
+	zend_hash_del(autoload_current_classnames, lc_name);
 
-	if (!key) {
-		zend_string_release_ex(lc_name, 0);
-	}
 	if (ce) {
 		ZEND_ASSERT(!CG(in_compilation));
-		if (ce_cache) {
+		if (ce_cache && !ce->runtime_module) {
 			SET_CE_CACHE(ce_cache, ce);
 		}
 	}
+	if (!key) {
+		zend_string_release_ex(lc_name, 0);
+	}
 	return ce;
+}
+/* }}} */
+
+ZEND_API zend_class_entry *zend_lookup_class_ex(zend_string *name, zend_string *key, uint32_t flags) /* {{{ */
+{
+	return zend_lookup_class_ex_in_runtime_module(zend_get_current_runtime_module(), name, key, flags);
 }
 /* }}} */
 

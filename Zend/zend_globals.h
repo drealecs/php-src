@@ -64,6 +64,9 @@ END_EXTERN_C()
 # define ZEND_MAX_ALLOWED_STACK_SIZE_DETECT     0
 #endif
 
+typedef struct _zend_runtime_module zend_runtime_module;
+typedef struct _zend_runtime_context zend_runtime_context;
+
 #include "zend_compile.h"
 
 /* excpt.h on Digital Unix 4.0 defines function_table */
@@ -197,6 +200,12 @@ struct _zend_executor_globals {
 	HashTable *function_table;	/* function symbol table */
 	HashTable *class_table;		/* class table */
 	HashTable *zend_constants;	/* constants table */
+
+	HashTable runtime_modules;	/* zend_runtime_module* keyed by name */
+	HashTable runtime_module_root_dependencies;	/* zend_runtime_module* dependencies of the root context */
+	zend_runtime_context *runtime_module_root_context;
+	zend_runtime_module *current_runtime_module;
+	zend_runtime_module *runtime_module_override;
 
 	zval          *vm_stack_top;
 	zval          *vm_stack_end;
