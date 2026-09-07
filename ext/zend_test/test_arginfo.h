@@ -1,6 +1,12 @@
 /* This is a generated file, edit test.stub.php instead.
- * Stub hash: 8ca2fc33013d5a1c325bf5f0090cc6416a242297
+ * Stub hash: 4d728e740122add9d4c91f5c1abb5f5017690636
  * Has decl header: yes */
+
+#include "zend_attributes.h"
+#include "zend_constants.h"
+#if (PHP_VERSION_ID >= 80100)
+#include "zend_enum.h"
+#endif
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_trigger_bailout, 0, 0, IS_NEVER, 0)
 ZEND_END_ARG_INFO()
@@ -53,6 +59,116 @@ ZEND_END_ARG_INFO()
 
 #define arginfo_zend_delref arginfo_zend_leak_variable
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_bool, 0, 1, _IS_BOOL, 0)
+	ZEND_ARG_TYPE_INFO(0, param, _IS_BOOL, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_bool_or_null, 0, 1, _IS_BOOL, 1)
+	ZEND_ARG_TYPE_INFO(0, param, _IS_BOOL, 1)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_bool_slow_zpp arginfo_zend_bool
+
+#define arginfo_zend_bool_or_null_slow_zpp arginfo_zend_bool_or_null
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_int, 0, 1, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, param, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_int_or_null, 0, 1, IS_LONG, 1)
+	ZEND_ARG_TYPE_INFO(0, param, IS_LONG, 1)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_int_slow_zpp arginfo_zend_int
+
+#define arginfo_zend_int_or_null_slow_zpp arginfo_zend_int_or_null
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_float, 0, 1, IS_DOUBLE, 0)
+	ZEND_ARG_TYPE_INFO(0, param, IS_DOUBLE, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_float_or_null, 0, 1, IS_DOUBLE, 1)
+	ZEND_ARG_TYPE_INFO(0, param, IS_DOUBLE, 1)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_float_slow_zpp arginfo_zend_float
+
+#define arginfo_zend_float_or_null_slow_zpp arginfo_zend_float_or_null
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_zend_number, 0, 1, MAY_BE_LONG|MAY_BE_DOUBLE)
+	ZEND_ARG_TYPE_MASK(0, param, MAY_BE_LONG|MAY_BE_DOUBLE, NULL)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_zend_number_or_null, 0, 1, MAY_BE_LONG|MAY_BE_DOUBLE|MAY_BE_NULL)
+	ZEND_ARG_TYPE_MASK(0, param, MAY_BE_LONG|MAY_BE_DOUBLE|MAY_BE_NULL, NULL)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_number_slow_zpp arginfo_zend_number
+
+#define arginfo_zend_number_or_null_slow_zpp arginfo_zend_number_or_null
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_object, 0, 1, IS_OBJECT, 0)
+	ZEND_ARG_TYPE_INFO(0, param, IS_OBJECT, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_object_or_null, 0, 1, IS_OBJECT, 1)
+	ZEND_ARG_TYPE_INFO(0, param, IS_OBJECT, 1)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_object_slow_zpp arginfo_zend_object
+
+#define arginfo_zend_object_or_null_slow_zpp arginfo_zend_object_or_null
+
+#define arginfo_zend_obj arginfo_zend_object
+
+#define arginfo_zend_obj_or_null arginfo_zend_object_or_null
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_obj_or_class_name, 0, 1, IS_STRING, 0)
+	ZEND_ARG_TYPE_MASK(0, param, MAY_BE_OBJECT|MAY_BE_STRING, NULL)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_obj_or_class_name_or_null, 0, 1, IS_STRING, 1)
+	ZEND_ARG_TYPE_MASK(0, param, MAY_BE_OBJECT|MAY_BE_STRING|MAY_BE_NULL, NULL)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_class_name, 0, 1, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO(0, param, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zend_class_name_or_null, 0, 1, IS_STRING, 1)
+	ZEND_ARG_TYPE_INFO(0, param, IS_STRING, 1)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_class_name_slow_zpp arginfo_zend_class_name
+
+#define arginfo_zend_class_name_or_null_slow_zpp arginfo_zend_class_name_or_null
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_zend_object_sdtClass, 0, 1, stdClass, 0)
+	ZEND_ARG_OBJ_INFO(0, param, stdClass, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_zend_object_sdtClass_or_null, 0, 1, stdClass, 1)
+	ZEND_ARG_OBJ_INFO(0, param, stdClass, 1)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_object_sdtClass_slow_zpp arginfo_zend_object_sdtClass
+
+#define arginfo_zend_object_sdtClass_or_null_slow_zpp arginfo_zend_object_sdtClass_or_null
+
+#define arginfo_zend_obj_sdtClass arginfo_zend_object_sdtClass
+
+#define arginfo_zend_obj_sdtClass_or_null arginfo_zend_object_sdtClass_or_null
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_zend_resource, 0, 0, 1)
+	ZEND_ARG_INFO(0, param)
+ZEND_END_ARG_INFO()
+
+#define arginfo_zend_resource_or_null arginfo_zend_resource
+
+#define arginfo_zend_resource_slow_zpp arginfo_zend_resource
+
+#define arginfo_zend_resource_or_null_slow_zpp arginfo_zend_resource
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_zend_string_or_object, 0, 1, MAY_BE_OBJECT|MAY_BE_STRING)
 	ZEND_ARG_TYPE_MASK(0, param, MAY_BE_OBJECT|MAY_BE_STRING, NULL)
 ZEND_END_ARG_INFO()
@@ -61,12 +177,20 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_zend_string_or_object_or_null, 0
 	ZEND_ARG_TYPE_MASK(0, param, MAY_BE_OBJECT|MAY_BE_STRING|MAY_BE_NULL, NULL)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX(arginfo_zend_string_or_stdclass, 0, 1, stdClass, MAY_BE_STRING)
-	ZEND_ARG_INFO(0, param)
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX(arginfo_zend_obj_stdclass_or_string, 0, 1, stdClass, MAY_BE_STRING)
+	ZEND_ARG_OBJ_TYPE_MASK(0, param, stdClass, MAY_BE_STRING|MAY_BE_NULL, NULL)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX(arginfo_zend_string_or_stdclass_or_null, 0, 1, stdClass, MAY_BE_STRING|MAY_BE_NULL)
-	ZEND_ARG_INFO(0, param)
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX(arginfo_zend_obj_stdclass_or_string_or_null, 0, 1, stdClass, MAY_BE_STRING|MAY_BE_NULL)
+	ZEND_ARG_OBJ_TYPE_MASK(0, param, stdClass, MAY_BE_STRING|MAY_BE_NULL, NULL)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX(arginfo_zend_obj_stdclass_or_int, 0, 1, stdClass, MAY_BE_LONG)
+	ZEND_ARG_OBJ_TYPE_MASK(0, param, stdClass, MAY_BE_LONG|MAY_BE_NULL, NULL)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX(arginfo_zend_obj_stdclass_or_int_or_null, 0, 1, stdClass, MAY_BE_LONG|MAY_BE_NULL)
+	ZEND_ARG_OBJ_TYPE_MASK(0, param, stdClass, MAY_BE_LONG|MAY_BE_NULL, NULL)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_zend_number_or_string, 0, 1, MAY_BE_STRING|MAY_BE_LONG|MAY_BE_DOUBLE)
@@ -226,6 +350,10 @@ ZEND_END_ARG_INFO()
 
 #define arginfo_ZendTestNS2_ZendSubNS_namespaced_deprecated_aliased_func arginfo_zend_test_void_return
 
+#define arginfo_class__ZendTestTraitForInternalClass_traitMethod arginfo_zend_test_nodiscard
+
+#define arginfo_class__ZendTestTraitForInternalClass2_traitMethod2 arginfo_zend_test_nodiscard
+
 #define arginfo_class__ZendTestClass_is_object arginfo_zend_test_nodiscard
 
 #define arginfo_class__ZendTestClass___toString arginfo_zend_get_current_func_name
@@ -309,10 +437,50 @@ static ZEND_FUNCTION(zend_terminate_string);
 static ZEND_FUNCTION(zend_leak_variable);
 static ZEND_FUNCTION(zend_leak_bytes);
 static ZEND_FUNCTION(zend_delref);
+static ZEND_FUNCTION(zend_bool);
+static ZEND_FUNCTION(zend_bool_or_null);
+static ZEND_FUNCTION(zend_bool_slow_zpp);
+static ZEND_FUNCTION(zend_bool_or_null_slow_zpp);
+static ZEND_FUNCTION(zend_int);
+static ZEND_FUNCTION(zend_int_or_null);
+static ZEND_FUNCTION(zend_int_slow_zpp);
+static ZEND_FUNCTION(zend_int_or_null_slow_zpp);
+static ZEND_FUNCTION(zend_float);
+static ZEND_FUNCTION(zend_float_or_null);
+static ZEND_FUNCTION(zend_float_slow_zpp);
+static ZEND_FUNCTION(zend_float_or_null_slow_zpp);
+static ZEND_FUNCTION(zend_number);
+static ZEND_FUNCTION(zend_number_or_null);
+static ZEND_FUNCTION(zend_number_slow_zpp);
+static ZEND_FUNCTION(zend_number_or_null_slow_zpp);
+static ZEND_FUNCTION(zend_object);
+static ZEND_FUNCTION(zend_object_or_null);
+static ZEND_FUNCTION(zend_object_slow_zpp);
+static ZEND_FUNCTION(zend_object_or_null_slow_zpp);
+static ZEND_FUNCTION(zend_obj);
+static ZEND_FUNCTION(zend_obj_or_null);
+static ZEND_FUNCTION(zend_obj_or_class_name);
+static ZEND_FUNCTION(zend_obj_or_class_name_or_null);
+static ZEND_FUNCTION(zend_class_name);
+static ZEND_FUNCTION(zend_class_name_or_null);
+static ZEND_FUNCTION(zend_class_name_slow_zpp);
+static ZEND_FUNCTION(zend_class_name_or_null_slow_zpp);
+static ZEND_FUNCTION(zend_object_sdtClass);
+static ZEND_FUNCTION(zend_object_sdtClass_or_null);
+static ZEND_FUNCTION(zend_object_sdtClass_slow_zpp);
+static ZEND_FUNCTION(zend_object_sdtClass_or_null_slow_zpp);
+static ZEND_FUNCTION(zend_obj_sdtClass);
+static ZEND_FUNCTION(zend_obj_sdtClass_or_null);
+static ZEND_FUNCTION(zend_resource);
+static ZEND_FUNCTION(zend_resource_or_null);
+static ZEND_FUNCTION(zend_resource_slow_zpp);
+static ZEND_FUNCTION(zend_resource_or_null_slow_zpp);
 static ZEND_FUNCTION(zend_string_or_object);
 static ZEND_FUNCTION(zend_string_or_object_or_null);
-static ZEND_FUNCTION(zend_string_or_stdclass);
-static ZEND_FUNCTION(zend_string_or_stdclass_or_null);
+static ZEND_FUNCTION(zend_obj_stdclass_or_string);
+static ZEND_FUNCTION(zend_obj_stdclass_or_string_or_null);
+static ZEND_FUNCTION(zend_obj_stdclass_or_int);
+static ZEND_FUNCTION(zend_obj_stdclass_or_int_or_null);
 static ZEND_FUNCTION(zend_number_or_string);
 static ZEND_FUNCTION(zend_number_or_string_or_null);
 static ZEND_FUNCTION(zend_iterable);
@@ -361,6 +529,8 @@ static ZEND_FUNCTION(ZendTestNS2_namespaced_func);
 static ZEND_FUNCTION(ZendTestNS2_namespaced_deprecated_func);
 static ZEND_FUNCTION(ZendTestNS2_ZendSubNS_namespaced_func);
 static ZEND_FUNCTION(ZendTestNS2_ZendSubNS_namespaced_deprecated_func);
+static ZEND_METHOD(_ZendTestTraitForInternalClass, traitMethod);
+static ZEND_METHOD(_ZendTestTraitForInternalClass2, traitMethod2);
 static ZEND_METHOD(_ZendTestClass, is_object);
 static ZEND_METHOD(_ZendTestClass, __toString);
 static ZEND_METHOD(_ZendTestClass, returnsStatic);
@@ -443,10 +613,50 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_FE(zend_leak_variable, arginfo_zend_leak_variable)
 	ZEND_FE(zend_leak_bytes, arginfo_zend_leak_bytes)
 	ZEND_FE(zend_delref, arginfo_zend_delref)
+	ZEND_FE(zend_bool, arginfo_zend_bool)
+	ZEND_FE(zend_bool_or_null, arginfo_zend_bool_or_null)
+	ZEND_FE(zend_bool_slow_zpp, arginfo_zend_bool_slow_zpp)
+	ZEND_FE(zend_bool_or_null_slow_zpp, arginfo_zend_bool_or_null_slow_zpp)
+	ZEND_FE(zend_int, arginfo_zend_int)
+	ZEND_FE(zend_int_or_null, arginfo_zend_int_or_null)
+	ZEND_FE(zend_int_slow_zpp, arginfo_zend_int_slow_zpp)
+	ZEND_FE(zend_int_or_null_slow_zpp, arginfo_zend_int_or_null_slow_zpp)
+	ZEND_FE(zend_float, arginfo_zend_float)
+	ZEND_FE(zend_float_or_null, arginfo_zend_float_or_null)
+	ZEND_FE(zend_float_slow_zpp, arginfo_zend_float_slow_zpp)
+	ZEND_FE(zend_float_or_null_slow_zpp, arginfo_zend_float_or_null_slow_zpp)
+	ZEND_FE(zend_number, arginfo_zend_number)
+	ZEND_FE(zend_number_or_null, arginfo_zend_number_or_null)
+	ZEND_FE(zend_number_slow_zpp, arginfo_zend_number_slow_zpp)
+	ZEND_FE(zend_number_or_null_slow_zpp, arginfo_zend_number_or_null_slow_zpp)
+	ZEND_FE(zend_object, arginfo_zend_object)
+	ZEND_FE(zend_object_or_null, arginfo_zend_object_or_null)
+	ZEND_FE(zend_object_slow_zpp, arginfo_zend_object_slow_zpp)
+	ZEND_FE(zend_object_or_null_slow_zpp, arginfo_zend_object_or_null_slow_zpp)
+	ZEND_FE(zend_obj, arginfo_zend_obj)
+	ZEND_FE(zend_obj_or_null, arginfo_zend_obj_or_null)
+	ZEND_FE(zend_obj_or_class_name, arginfo_zend_obj_or_class_name)
+	ZEND_FE(zend_obj_or_class_name_or_null, arginfo_zend_obj_or_class_name_or_null)
+	ZEND_FE(zend_class_name, arginfo_zend_class_name)
+	ZEND_FE(zend_class_name_or_null, arginfo_zend_class_name_or_null)
+	ZEND_FE(zend_class_name_slow_zpp, arginfo_zend_class_name_slow_zpp)
+	ZEND_FE(zend_class_name_or_null_slow_zpp, arginfo_zend_class_name_or_null_slow_zpp)
+	ZEND_FE(zend_object_sdtClass, arginfo_zend_object_sdtClass)
+	ZEND_FE(zend_object_sdtClass_or_null, arginfo_zend_object_sdtClass_or_null)
+	ZEND_FE(zend_object_sdtClass_slow_zpp, arginfo_zend_object_sdtClass_slow_zpp)
+	ZEND_FE(zend_object_sdtClass_or_null_slow_zpp, arginfo_zend_object_sdtClass_or_null_slow_zpp)
+	ZEND_FE(zend_obj_sdtClass, arginfo_zend_obj_sdtClass)
+	ZEND_FE(zend_obj_sdtClass_or_null, arginfo_zend_obj_sdtClass_or_null)
+	ZEND_FE(zend_resource, arginfo_zend_resource)
+	ZEND_FE(zend_resource_or_null, arginfo_zend_resource_or_null)
+	ZEND_FE(zend_resource_slow_zpp, arginfo_zend_resource_slow_zpp)
+	ZEND_FE(zend_resource_or_null_slow_zpp, arginfo_zend_resource_or_null_slow_zpp)
 	ZEND_FE(zend_string_or_object, arginfo_zend_string_or_object)
 	ZEND_FE(zend_string_or_object_or_null, arginfo_zend_string_or_object_or_null)
-	ZEND_FE(zend_string_or_stdclass, arginfo_zend_string_or_stdclass)
-	ZEND_FE(zend_string_or_stdclass_or_null, arginfo_zend_string_or_stdclass_or_null)
+	ZEND_FE(zend_obj_stdclass_or_string, arginfo_zend_obj_stdclass_or_string)
+	ZEND_FE(zend_obj_stdclass_or_string_or_null, arginfo_zend_obj_stdclass_or_string_or_null)
+	ZEND_FE(zend_obj_stdclass_or_int, arginfo_zend_obj_stdclass_or_int)
+	ZEND_FE(zend_obj_stdclass_or_int_or_null, arginfo_zend_obj_stdclass_or_int_or_null)
 	ZEND_FE(zend_number_or_string, arginfo_zend_number_or_string)
 	ZEND_FE(zend_number_or_string_or_null, arginfo_zend_number_or_string_or_null)
 	ZEND_FE(zend_iterable, arginfo_zend_iterable)
@@ -539,6 +749,16 @@ static const zend_function_entry ext_functions[] = {
 #else
 	ZEND_RAW_FENTRY(ZEND_NS_NAME("ZendTestNS2\\ZendSubNS", "namespaced_deprecated_aliased_func"), zif_zend_test_void_return, arginfo_ZendTestNS2_ZendSubNS_namespaced_deprecated_aliased_func, ZEND_ACC_DEPRECATED)
 #endif
+	ZEND_FE_END
+};
+
+static const zend_function_entry class__ZendTestTraitForInternalClass_methods[] = {
+	ZEND_ME(_ZendTestTraitForInternalClass, traitMethod, arginfo_class__ZendTestTraitForInternalClass_traitMethod, ZEND_ACC_PUBLIC)
+	ZEND_FE_END
+};
+
+static const zend_function_entry class__ZendTestTraitForInternalClass2_methods[] = {
+	ZEND_ME(_ZendTestTraitForInternalClass2, traitMethod2, arginfo_class__ZendTestTraitForInternalClass2_traitMethod2, ZEND_ACC_PUBLIC)
 	ZEND_FE_END
 };
 
@@ -716,6 +936,75 @@ static zend_class_entry *register_class__ZendTestInterface(void)
 	zend_string *const_DUMMY_comment = zend_string_init_interned("/**\n         * \"Lorem ipsum\"\n         * @see https://www.php.net\n         * @since 8.2\n         */", 98, 1);
 	zend_declare_class_constant_ex(class_entry, const_DUMMY_name, &const_DUMMY_value, ZEND_ACC_PUBLIC, const_DUMMY_comment);
 	zend_string_release_ex(const_DUMMY_name, true);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class__ZendTestTraitForInternalClass(void)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_CLASS_ENTRY(ce, "_ZendTestTraitForInternalClass", class__ZendTestTraitForInternalClass_methods);
+#if (PHP_VERSION_ID >= 80400)
+	class_entry = zend_register_internal_class_with_flags(&ce, NULL, ZEND_ACC_TRAIT);
+#else
+	class_entry = zend_register_internal_class_ex(&ce, NULL);
+	class_entry->ce_flags |= ZEND_ACC_TRAIT;
+#endif
+
+	zval const_ZEND_TRAIT_CONST_value;
+	ZVAL_LONG(&const_ZEND_TRAIT_CONST_value, 123);
+	zend_string *const_ZEND_TRAIT_CONST_name = zend_string_init_interned("ZEND_TRAIT_CONST", sizeof("ZEND_TRAIT_CONST") - 1, true);
+	zend_declare_class_constant_ex(class_entry, const_ZEND_TRAIT_CONST_name, &const_ZEND_TRAIT_CONST_value, ZEND_ACC_PUBLIC, NULL);
+	zend_string_release_ex(const_ZEND_TRAIT_CONST_name, true);
+
+	zval property_traitProp_default_value;
+	ZVAL_LONG(&property_traitProp_default_value, 456);
+	zend_string *property_traitProp_name = zend_string_init("traitProp", sizeof("traitProp") - 1, true);
+	zend_declare_typed_property(class_entry, property_traitProp_name, &property_traitProp_default_value, ZEND_ACC_PUBLIC, NULL, (zend_type) ZEND_TYPE_INIT_MASK(MAY_BE_LONG));
+	zend_string_release_ex(property_traitProp_name, true);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class__ZendTestTraitForInternalClass2(void)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_CLASS_ENTRY(ce, "_ZendTestTraitForInternalClass2", class__ZendTestTraitForInternalClass2_methods);
+#if (PHP_VERSION_ID >= 80400)
+	class_entry = zend_register_internal_class_with_flags(&ce, NULL, ZEND_ACC_TRAIT);
+#else
+	class_entry = zend_register_internal_class_ex(&ce, NULL);
+	class_entry->ce_flags |= ZEND_ACC_TRAIT;
+#endif
+
+	zval const_ZEND_TRAIT_CONST2_value;
+	ZVAL_LONG(&const_ZEND_TRAIT_CONST2_value, 321);
+	zend_string *const_ZEND_TRAIT_CONST2_name = zend_string_init_interned("ZEND_TRAIT_CONST2", sizeof("ZEND_TRAIT_CONST2") - 1, true);
+	zend_declare_class_constant_ex(class_entry, const_ZEND_TRAIT_CONST2_name, &const_ZEND_TRAIT_CONST2_value, ZEND_ACC_PUBLIC, NULL);
+	zend_string_release_ex(const_ZEND_TRAIT_CONST2_name, true);
+
+	zval property_staticTraitProp_default_value;
+	ZVAL_LONG(&property_staticTraitProp_default_value, 999);
+	zend_string *property_staticTraitProp_name = zend_string_init("staticTraitProp", sizeof("staticTraitProp") - 1, true);
+	zend_declare_typed_property(class_entry, property_staticTraitProp_name, &property_staticTraitProp_default_value, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC, NULL, (zend_type) ZEND_TYPE_INIT_MASK(MAY_BE_LONG));
+	zend_string_release_ex(property_staticTraitProp_name, true);
+
+	return class_entry;
+}
+
+static zend_class_entry *register_class__ZendTestClassWithTraits(zend_class_entry *class_entry__ZendTestTraitForInternalClass, zend_class_entry *class_entry__ZendTestTraitForInternalClass2)
+{
+	zend_class_entry ce, *class_entry;
+
+	INIT_CLASS_ENTRY(ce, "_ZendTestClassWithTraits", NULL);
+#if (PHP_VERSION_ID >= 80400)
+	class_entry = zend_register_internal_class_with_flags(&ce, NULL, 0);
+#else
+	class_entry = zend_register_internal_class_ex(&ce, NULL);
+#endif
+	zend_class_use_internal_traits(class_entry, 2, class_entry__ZendTestTraitForInternalClass, class_entry__ZendTestTraitForInternalClass2);
 
 	return class_entry;
 }

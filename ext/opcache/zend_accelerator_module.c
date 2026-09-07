@@ -25,6 +25,7 @@
 #include "zend_closures.h"
 #include "zend_extensions.h"
 #include "zend_modules.h"
+#include "zend_runtime_module.h"
 #include "zend_shared_alloc.h"
 #include "zend_accelerator_blacklist.h"
 #include "zend_file_cache.h"
@@ -102,6 +103,15 @@ static ZEND_INI_MH(OnUpdateMemoryConsumption)
 
 static ZEND_INI_MH(OnUpdateInternedStringsBuffer)
 {
+	if (accel_startup_ok) {
+		if (strcmp(sapi_module.name, "fpm-fcgi") == 0) {
+			zend_accel_error(ACCEL_LOG_WARNING, "opcache.interned_strings_buffer cannot be changed when OPcache is already set up. Are you using php_admin_value[opcache.interned_strings_buffer] in an individual pool's configuration?\n");
+		} else {
+			zend_accel_error(ACCEL_LOG_WARNING, "opcache.interned_strings_buffer cannot be changed when OPcache is already set up.\n");
+		}
+		return FAILURE;
+	}
+
 	zend_long *p = ZEND_INI_GET_ADDR();
 	zend_long size = zend_ini_parse_quantity_warn(new_value, entry->name);
 
@@ -969,6 +979,11 @@ ZEND_FUNCTION(opcache_compile_file)
 
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "S", &script_name) == FAILURE) {
 		RETURN_THROWS();
+	}
+	if (zend_runtime_context_is_module_sensitive(zend_get_current_runtime_context())) {
+		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME
+			" cannot compile files in a module-sensitive runtime context");
+		RETURN_FALSE;
 	}
 
 	if (!accel_startup_ok) {

@@ -7,6 +7,10 @@ class stdClass
 {
 }
 
+function module_add_dependency(string $dependency): void {}
+
+function module_run(string $module, Closure $callback): mixed {}
+
 /** @refcount 1 */
 function clone(object $object, array $withProperties = []): object {}
 
@@ -15,7 +19,10 @@ function exit(string|int $status = 0): never {}
 /** @alias exit */
 function die(string|int $status = 0): never {}
 
-/** @refcount 1 */
+/**
+ * @refcount 1
+ * @compile-time-eval
+ */
 function zend_version(): string {}
 
 /** @forbid-dynamic-calls */

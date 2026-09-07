@@ -17,10 +17,12 @@
 #include "php_assert.h"
 #include "php_ini.h"
 #include "zend_exceptions.h"
+#include "zend_runtime_module.h"
 /* }}} */
 
 ZEND_BEGIN_MODULE_GLOBALS(assert)
 	zval callback;
+	zend_runtime_module *callback_runtime_module;
 	char *cb;
 	bool active;
 	bool bail;
@@ -49,12 +51,14 @@ static PHP_INI_MH(OnChangeCallback) /* {{{ */
 		if (Z_TYPE(ASSERTG(callback)) != IS_UNDEF) {
 			zval_ptr_dtor(&ASSERTG(callback));
 			ZVAL_UNDEF(&ASSERTG(callback));
+			ASSERTG(callback_runtime_module) = NULL;
 		}
 		if (new_value && (Z_TYPE(ASSERTG(callback)) != IS_UNDEF || ZSTR_LEN(new_value))) {
 			if (php_must_emit_ini_deprecation(stage)) {
 				php_error_docref(NULL, E_DEPRECATED, "assert.callback INI setting is deprecated");
 			}
 			ZVAL_STR_COPY(&ASSERTG(callback), new_value);
+			ASSERTG(callback_runtime_module) = zend_get_current_runtime_module();
 		}
 	} else {
 		if (ASSERTG(cb)) {
@@ -128,6 +132,7 @@ PHP_INI_END()
 static void php_assert_init_globals(zend_assert_globals *assert_globals_p) /* {{{ */
 {
 	ZVAL_UNDEF(&assert_globals_p->callback);
+	assert_globals_p->callback_runtime_module = NULL;
 	assert_globals_p->cb = NULL;
 }
 /* }}} */
@@ -157,6 +162,7 @@ PHP_RSHUTDOWN_FUNCTION(assert) /* {{{ */
 	if (Z_TYPE(ASSERTG(callback)) != IS_UNDEF) {
 		zval_ptr_dtor(&ASSERTG(callback));
 		ZVAL_UNDEF(&ASSERTG(callback));
+		ASSERTG(callback_runtime_module) = NULL;
 	}
 
 	return SUCCESS;
@@ -168,6 +174,38 @@ PHP_MINFO_FUNCTION(assert) /* {{{ */
 	DISPLAY_INI_ENTRIES();
 }
 /* }}} */
+
+static zend_result php_assert_call_callback(
+		zval *callback, zend_runtime_module *runtime_module,
+		zval *retval, uint32_t param_count, zval params[])
+{
+	zend_fcall_info fci;
+	zend_fcall_info_cache fcc;
+	char *error = NULL;
+
+	if (zend_fcall_info_init_in_runtime_module(
+			callback, runtime_module, 0, &fci, &fcc, NULL, &error) == FAILURE) {
+		if (!EG(exception)) {
+			zend_string *callable_name = zend_get_callable_name(callback);
+			zend_throw_error(NULL, "Invalid callback %s, %s",
+				ZSTR_VAL(callable_name), error ? error : "callback is not callable");
+			zend_string_release(callable_name);
+		}
+		if (error) {
+			efree(error);
+		}
+		return SUCCESS;
+	}
+
+	fci.retval = retval;
+	fci.param_count = param_count;
+	fci.params = params;
+	zend_result result = fcc.function_handler->type == ZEND_INTERNAL_FUNCTION
+		? zend_call_function_in_runtime_module(&fci, &fcc, runtime_module)
+		: zend_call_function(&fci, &fcc);
+	zend_release_fcall_info_cache(&fcc);
+	return result;
+}
 
 /* {{{ Checks if assertion is false */
 PHP_FUNCTION(assert)
@@ -221,9 +259,11 @@ PHP_FUNCTION(assert)
 
 		if (description_str) {
 			ZVAL_STR(&args[3], description_str);
-			call_user_function(NULL, NULL, &ASSERTG(callback), &retval, 4, args);
+			php_assert_call_callback(
+				&ASSERTG(callback), ASSERTG(callback_runtime_module), &retval, 4, args);
 		} else {
-			call_user_function(NULL, NULL, &ASSERTG(callback), &retval, 3, args);
+			php_assert_call_callback(
+				&ASSERTG(callback), ASSERTG(callback_runtime_module), &retval, 3, args);
 		}
 
 		zval_ptr_dtor(&retval);
@@ -329,8 +369,10 @@ PHP_FUNCTION(assert_options)
 			zval_ptr_dtor(&ASSERTG(callback));
 			if (Z_TYPE_P(value) == IS_NULL) {
 				ZVAL_UNDEF(&ASSERTG(callback));
+				ASSERTG(callback_runtime_module) = NULL;
 			} else {
 				ZVAL_COPY(&ASSERTG(callback), value);
+				ASSERTG(callback_runtime_module) = zend_get_current_runtime_module();
 			}
 		}
 		return;

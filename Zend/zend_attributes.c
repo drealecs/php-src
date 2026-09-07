@@ -19,6 +19,7 @@
 #include "zend.h"
 #include "zend_API.h"
 #include "zend_attributes.h"
+#include "zend_runtime_module.h"
 #include "zend_attributes_arginfo.h"
 #include "zend_exceptions.h"
 #include "zend_smart_str.h"
@@ -314,7 +315,7 @@ ZEND_API zend_attribute *zend_get_parameter_attribute_str(const HashTable *attri
 	return get_attribute_str(attributes, str, len, offset + 1);
 }
 
-ZEND_API zend_result zend_get_attribute_value(zval *ret, const zend_attribute *attr, uint32_t i, zend_class_entry *scope)
+ZEND_API zend_result zend_get_attribute_value_in_runtime_module(zval *ret, const zend_attribute *attr, uint32_t i, zend_class_entry *scope, zend_runtime_module *runtime_module)
 {
 	if (i >= attr->argc) {
 		return FAILURE;
@@ -323,7 +324,7 @@ ZEND_API zend_result zend_get_attribute_value(zval *ret, const zend_attribute *a
 	ZVAL_COPY_OR_DUP(ret, &attr->args[i].value);
 
 	if (Z_TYPE_P(ret) == IS_CONSTANT_AST) {
-		if (SUCCESS != zval_update_constant_ex(ret, scope)) {
+		if (SUCCESS != zval_update_constant_ex_in_runtime_module(ret, scope, runtime_module)) {
 			zval_ptr_dtor(ret);
 			return FAILURE;
 		}
@@ -332,7 +333,13 @@ ZEND_API zend_result zend_get_attribute_value(zval *ret, const zend_attribute *a
 	return SUCCESS;
 }
 
-ZEND_API zend_result zend_get_attribute_object(zval *obj, zend_class_entry *attribute_ce, zend_attribute *attribute_data, zend_class_entry *scope, zend_string *filename)
+ZEND_API zend_result zend_get_attribute_value(zval *ret, const zend_attribute *attr, uint32_t i, zend_class_entry *scope)
+{
+	return zend_get_attribute_value_in_runtime_module(
+		ret, attr, i, scope, zend_get_current_runtime_module());
+}
+
+ZEND_API zend_result zend_get_attribute_object_in_runtime_module(zval *obj, zend_class_entry *attribute_ce, zend_attribute *attribute_data, zend_class_entry *scope, zend_runtime_module *runtime_module, zend_string *filename)
 {
 	zend_execute_data *call = NULL;
 
@@ -363,6 +370,9 @@ ZEND_API zend_result zend_get_attribute_object(zval *obj, zend_class_entry *attr
 
 		memset(call->func, 0, sizeof(zend_function));
 		call->func->type = ZEND_USER_FUNCTION;
+		call->func->common.runtime_module = runtime_module;
+		call->runtime_module = runtime_module;
+		call->has_explicit_runtime_module = true;
 		call->func->op_array.fn_flags =
 			attribute_data->flags & ZEND_ATTRIBUTE_STRICT_TYPES ? ZEND_ACC_STRICT_TYPES : 0;
 		call->func->op_array.fn_flags |= ZEND_ACC_CALL_VIA_TRAMPOLINE;
@@ -382,7 +392,8 @@ ZEND_API zend_result zend_get_attribute_object(zval *obj, zend_class_entry *attr
 
 		for (uint32_t i = 0; i < attribute_data->argc; i++) {
 			zval val;
-			if (FAILURE == zend_get_attribute_value(&val, attribute_data, i, scope)) {
+			if (FAILURE == zend_get_attribute_value_in_runtime_module(
+					&val, attribute_data, i, scope, runtime_module)) {
 				result = FAILURE;
 				goto out;
 			}
@@ -417,6 +428,12 @@ ZEND_API zend_result zend_get_attribute_object(zval *obj, zend_class_entry *attr
 	}
 
 	return result;
+}
+
+ZEND_API zend_result zend_get_attribute_object(zval *obj, zend_class_entry *attribute_ce, zend_attribute *attribute_data, zend_class_entry *scope, zend_string *filename)
+{
+	return zend_get_attribute_object_in_runtime_module(
+		obj, attribute_ce, attribute_data, scope, zend_get_current_runtime_module(), filename);
 }
 
 static const char *target_names[] = {

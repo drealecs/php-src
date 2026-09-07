@@ -23,6 +23,8 @@
 #include "zend_types.h"
 #include "zend_map_ptr.h"
 
+typedef struct _zend_runtime_module zend_runtime_module;
+
 #ifndef ZEND_AST_SPEC
 # define ZEND_AST_SPEC 1
 #endif
@@ -233,6 +235,8 @@ typedef struct _zend_ast_fcc {
 	zend_ast_kind kind; /* Type of the node (ZEND_AST_* enum constant) */
 	zend_ast_attr attr; /* Additional attribute, use depending on node type */
 	uint32_t lineno;    /* Line number */
+	zend_string *filename;
+	zend_string *name;
 	zend_ast *args;
 	ZEND_MAP_PTR_DEF(zend_function *, fptr);
 } zend_ast_fcc;
@@ -344,13 +348,17 @@ ZEND_API zend_ast * ZEND_FASTCALL zend_ast_create_fcc(zend_ast *args);
 
 typedef struct {
 	bool had_side_effects;
+	zend_runtime_module *runtime_module;
 } zend_ast_evaluate_ctx;
 
 ZEND_API zend_result ZEND_FASTCALL zend_ast_evaluate(zval *result, zend_ast *ast, zend_class_entry *scope);
 ZEND_API zend_result ZEND_FASTCALL zend_ast_evaluate_ex(zval *result, zend_ast *ast, zend_class_entry *scope, bool *short_circuited_ptr, zend_ast_evaluate_ctx *ctx);
 ZEND_API zend_string *zend_ast_export(const char *prefix, zend_ast *ast, const char *suffix);
 
+/* Copies 'ast' to the heap, returns a refcounted AST reference */
 ZEND_API zend_ast_ref * ZEND_FASTCALL zend_ast_copy(zend_ast *ast);
+/* Duplicates 'ast' on the arena */
+ZEND_API zend_ast * ZEND_FASTCALL zend_ast_dup(zend_ast *ast);
 ZEND_API void ZEND_FASTCALL zend_ast_destroy(zend_ast *ast);
 ZEND_API void ZEND_FASTCALL zend_ast_ref_destroy(zend_ast_ref *ast);
 

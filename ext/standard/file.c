@@ -92,7 +92,6 @@ php_file_globals file_globals;
 # include <fnmatch.h>
 #endif
 
-#include "zend_attributes.h"
 #include "file_arginfo.h"
 
 /* }}} */
@@ -474,6 +473,7 @@ PHP_FUNCTION(file_put_contents)
 		if (php_memnstr(filename, "://", sizeof("://") - 1, filename + filename_len)) {
 			if (strncasecmp(filename, "file://", sizeof("file://") - 1)) {
 				php_error_docref(NULL, E_WARNING, "Exclusive locks may only be set for regular files");
+				php_stream_error_operation_end(context);
 				RETURN_FALSE;
 			}
 		}
@@ -822,7 +822,7 @@ PHP_FUNCTION(popen)
 
 	fp = VCWD_POPEN(command, posix_mode);
 	if (!fp) {
-		php_error_docref2(NULL, command, posix_mode, E_WARNING, "%s", strerror(errno));
+		php_error_docref(NULL, E_WARNING, "%s", strerror(errno));
 		efree(posix_mode);
 		RETURN_FALSE;
 	}
@@ -831,7 +831,7 @@ PHP_FUNCTION(popen)
 	stream = php_stream_fopen_from_pipe(fp, mode);
 
 	if (stream == NULL)	{
-		php_error_docref2(NULL, command, mode, E_WARNING, "%s", strerror(errno));
+		php_error_docref(NULL, E_WARNING, "%s", strerror(errno));
 		RETVAL_FALSE;
 	} else {
 		php_stream_to_zval(stream, return_value);

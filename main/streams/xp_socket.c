@@ -15,7 +15,7 @@
 #include "php.h"
 #include "ext/standard/file.h"
 #include "php_streams.h"
-#include "php_network.h"
+#include "php_io.h"
 
 #if defined(PHP_WIN32) || defined(__riscos__)
 # undef AF_UNIX
@@ -523,11 +523,19 @@ static int php_sockop_cast(php_stream *stream, int castas, void **ret)
 			if (ret)
 				*(php_socket_t *)ret = sock->socket;
 			return SUCCESS;
+		case PHP_STREAM_AS_FD_FOR_COPY:
+			if (ret) {
+				php_io_fd *copy_fd = (php_io_fd *) ret;
+				copy_fd->socket = sock->socket;
+				copy_fd->fd_type = PHP_IO_FD_SOCKET;
+				copy_fd->timeout = sock->timeout;
+				copy_fd->is_blocked = sock->is_blocked;
+			}
+			return SUCCESS;
 		default:
 			return FAILURE;
 	}
 }
-/* }}} */
 
 /* These may look identical, but we need them this way so that
  * we can determine which type of socket we are dealing with
@@ -669,6 +677,50 @@ static inline char *parse_ip_address(php_stream_xport_param *xparam, int *portno
 	return parse_ip_address_ex(xparam->inputs.name, xparam->inputs.namelen, portno, xparam->want_errortext, &xparam->outputs.error_text);
 }
 
+static int php_sockop_parse_buffer_sizes(php_stream *stream, php_stream_xport_param *xparam,
+		php_sockvals *sockvals)
+{
+	zval *tmpzval;
+
+	if (!PHP_STREAM_CONTEXT(stream)) {
+		return 0;
+	}
+
+#ifdef SO_RCVBUF
+	if ((tmpzval = php_stream_context_get_option(PHP_STREAM_CONTEXT(stream), "socket", "so_rcvbuf")) != NULL) {
+		zend_long bufsize = zval_get_long(tmpzval);
+
+		if (bufsize < 1 || bufsize > INT_MAX) {
+			if (xparam->want_errortext) {
+				xparam->outputs.error_text = strpprintf(0, "so_rcvbuf context option must be between 1 and %d", INT_MAX);
+			}
+			return -1;
+		}
+
+		sockvals->mask |= PHP_SOCKVAL_SO_RCVBUF;
+		sockvals->rcvbuf = (int) bufsize;
+	}
+#endif
+
+#ifdef SO_SNDBUF
+	if ((tmpzval = php_stream_context_get_option(PHP_STREAM_CONTEXT(stream), "socket", "so_sndbuf")) != NULL) {
+		zend_long bufsize = zval_get_long(tmpzval);
+
+		if (bufsize < 1 || bufsize > INT_MAX) {
+			if (xparam->want_errortext) {
+				xparam->outputs.error_text = strpprintf(0, "so_sndbuf context option must be between 1 and %d", INT_MAX);
+			}
+			return -1;
+		}
+
+		sockvals->mask |= PHP_SOCKVAL_SO_SNDBUF;
+		sockvals->sndbuf = (int) bufsize;
+	}
+#endif
+
+	return 0;
+}
+
 static inline int php_tcp_sockop_bind(php_stream *stream, php_netstream_data_t *sock,
 		php_stream_xport_param *xparam)
 {
@@ -712,6 +764,11 @@ static inline int php_tcp_sockop_bind(php_stream *stream, php_netstream_data_t *
 		return -1;
 	}
 
+	if (php_sockop_parse_buffer_sizes(stream, xparam, &sockvals) == -1) {
+		efree(host);
+		return -1;
+	}
+
 #ifdef IPV6_V6ONLY
 	if (PHP_STREAM_CONTEXT(stream)
 		&& (tmpzval = php_stream_context_get_option(PHP_STREAM_CONTEXT(stream), "socket", "ipv6_v6only")) != NULL
@@ -748,6 +805,16 @@ static inline int php_tcp_sockop_bind(php_stream *stream, php_netstream_data_t *
 		&& zend_is_true(tmpzval)
 	) {
 		sockopts |= STREAM_SOCKOP_SO_BROADCAST;
+	}
+#endif
+
+#ifdef SO_LINGER
+	if (PHP_STREAM_XPORT_IS_TCP(stream)
+		&& PHP_STREAM_CONTEXT(stream)
+		&& (tmpzval = php_stream_context_get_option(PHP_STREAM_CONTEXT(stream), "socket", "so_linger")) != NULL
+	) {
+		sockvals.mask |= PHP_SOCKVAL_SO_LINGER;
+		sockvals.linger = (int)zval_get_long(tmpzval);
 	}
 #endif
 
@@ -850,6 +917,11 @@ static inline int php_tcp_sockop_connect(php_stream *stream, php_netstream_data_
 		return -1;
 	}
 
+	if (php_sockop_parse_buffer_sizes(stream, xparam, &sockvals) == -1) {
+		efree(host);
+		return -1;
+	}
+
 	if (PHP_STREAM_CONTEXT(stream) && (tmpzval = php_stream_context_get_option(PHP_STREAM_CONTEXT(stream), "socket", "bindto")) != NULL) {
 		if (Z_TYPE_P(tmpzval) != IS_STRING) {
 			if (xparam->want_errortext) {
@@ -878,6 +950,16 @@ static inline int php_tcp_sockop_connect(php_stream *stream, php_netstream_data_
 	) {
 		sockopts |= STREAM_SOCKOP_TCP_NODELAY;
 	}
+
+#ifdef SO_LINGER
+	if (PHP_STREAM_XPORT_IS_TCP(stream)
+		&& PHP_STREAM_CONTEXT(stream)
+		&& (tmpzval = php_stream_context_get_option(PHP_STREAM_CONTEXT(stream), "socket", "so_linger")) != NULL
+	) {
+		sockvals.mask |= PHP_SOCKVAL_SO_LINGER;
+		sockvals.linger = (int)zval_get_long(tmpzval);
+	}
+#endif
 
 #ifdef SO_KEEPALIVE
 	if (PHP_STREAM_XPORT_IS_TCP(stream) /* SO_KEEPALIVE is only applicable for TCP */

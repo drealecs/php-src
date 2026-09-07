@@ -198,6 +198,9 @@ typedef struct _zend_accel_globals {
 	bool               counted;   /* the process uses shared memory */
 	bool               enabled;
 	bool               locked;    /* thread obtained exclusive lock */
+#ifdef ZTS
+	uint32_t           unprotect_depth;
+#endif
 	bool               accelerator_enabled; /* accelerator enabled for current request */
 	bool               pcre_reseted;
 	zend_accel_directives   accel_directives;
@@ -333,6 +336,17 @@ zend_op_array *persistent_compile_file(zend_file_handle *file_handle, int type);
 zend_string* ZEND_FASTCALL accel_new_interned_string(zend_string *str);
 
 uint32_t zend_accel_get_class_name_map_ptr(zend_string *type_name);
+
+const zend_op_array *zend_accel_pfa_cache_get(
+		const uint32_t *declaring_lineno_ptr, const zend_function *called_function, bool cacheable_in_shm,
+		zend_runtime_module *creating_runtime_module);
+
+zend_op_array *zend_accel_compile_pfa(zend_ast *ast,
+		zend_string *declaring_filename,
+		const uint32_t *declaring_lineno_ptr,
+		const zend_function *called_function,
+		zend_string *pfa_func_name, bool cacheable_in_shm,
+		zend_runtime_module *creating_runtime_module);
 
 END_EXTERN_C()
 

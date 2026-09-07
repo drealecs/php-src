@@ -41,7 +41,7 @@ static const char *const zend_vm_kind_name[] = {
 /* HYBRID requires support for computed GOTO and global register variables*/
 #elif (defined(__GNUC__) && defined(HAVE_GCC_GLOBAL_REGS))
 # define ZEND_VM_KIND		ZEND_VM_KIND_HYBRID
-#elif defined(HAVE_MUSTTAIL) && defined(HAVE_PRESERVE_NONE) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__))
+#elif defined(HAVE_MUSTTAIL) && defined(HAVE_PRESERVE_NONE) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__)) && defined(__clang__)
 # define ZEND_VM_KIND		ZEND_VM_KIND_TAILCALL
 #else
 # define ZEND_VM_KIND		ZEND_VM_KIND_CALL
@@ -331,7 +331,9 @@ END_EXTERN_C()
 #define ZEND_INIT_PARENT_PROPERTY_HOOK_CALL 209
 #define ZEND_DECLARE_ATTRIBUTED_CONST       210
 #define ZEND_TYPE_ASSERT                    211
+#define ZEND_CALLABLE_CONVERT_PARTIAL       212
+#define ZEND_SEND_PLACEHOLDER               213
 
-#define ZEND_VM_LAST_OPCODE                 211
+#define ZEND_VM_LAST_OPCODE                 213
 
 #endif

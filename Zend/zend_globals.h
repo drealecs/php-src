@@ -64,6 +64,9 @@ END_EXTERN_C()
 # define ZEND_MAX_ALLOWED_STACK_SIZE_DETECT     0
 #endif
 
+typedef struct _zend_runtime_module zend_runtime_module;
+typedef struct _zend_runtime_context zend_runtime_context;
+
 #include "zend_compile.h"
 
 /* excpt.h on Digital Unix 4.0 defines function_table */
@@ -86,6 +89,12 @@ typedef struct zend_err_buf {
 	uint32_t capacity;
 	zend_error_info **errors;
 } zend_err_buf;
+
+typedef struct _zend_user_handler_stack_entry {
+	zval handler;
+	zend_runtime_module *runtime_module;
+	int error_reporting;
+} zend_user_handler_stack_entry;
 
 struct _zend_compiler_globals {
 	zend_stack loop_var_stack;
@@ -198,6 +207,11 @@ struct _zend_executor_globals {
 	HashTable *class_table;		/* class table */
 	HashTable *zend_constants;	/* constants table */
 
+	HashTable runtime_modules;	/* zend_runtime_module* keyed by name */
+	HashTable runtime_module_root_dependencies;	/* zend_runtime_module* dependencies of the root context */
+	HashTable runtime_module_internal_aliases;	/* Temporary internal class alias names */
+	zend_runtime_context *runtime_module_root_context;
+
 	zval          *vm_stack_top;
 	zval          *vm_stack_end;
 	zend_vm_stack  vm_stack;
@@ -243,7 +257,8 @@ struct _zend_executor_globals {
 	bool exception_ignore_args;
 	zval user_error_handler;
 	zval user_exception_handler;
-	zend_stack user_error_handlers_error_reporting;
+	zend_runtime_module *user_error_handler_runtime_module;
+	zend_runtime_module *user_exception_handler_runtime_module;
 	zend_stack user_error_handlers;
 	zend_stack user_exception_handlers;
 
@@ -325,16 +340,16 @@ struct _zend_executor_globals {
 	zend_strtod_state strtod_state;
 
 	HashTable callable_convert_cache;
+	HashTable partial_function_application_cache;
+	zend_stack lambda_cache;
 
 	void *reserved[ZEND_MAX_RESERVED_RESOURCES];
 };
 
 #ifdef ZTS
-/* Compile-time offsets of the hot globals, in a reserved region just before the
- * cache pointer. ZEND_AG_OFFSET is furthest, in zend_alloc.c. */
+/* Compile-time offsets of the hot globals, in a reserved region just before *_tsrm_ls_cache. */
 # define ZEND_CG_OFFSET   (-(ptrdiff_t) TSRM_ALIGNED_SIZE(sizeof(zend_compiler_globals)))
 # define ZEND_EG_OFFSET   (ZEND_CG_OFFSET - (ptrdiff_t) TSRM_ALIGNED_SIZE(sizeof(zend_executor_globals)))
-# define ZEND_SCNG_OFFSET (ZEND_EG_OFFSET - (ptrdiff_t) TSRM_ALIGNED_SIZE(sizeof(zend_php_scanner_globals)))
 #endif
 
 #define EG_FLAGS_INITIAL				(0)

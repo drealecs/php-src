@@ -83,7 +83,9 @@ ZEND_API zend_attribute *zend_get_parameter_attribute(const HashTable *attribute
 ZEND_API zend_attribute *zend_get_parameter_attribute_str(const HashTable *attributes, const char *str, size_t len, uint32_t offset);
 
 ZEND_API zend_result zend_get_attribute_value(zval *ret, const zend_attribute *attr, uint32_t i, zend_class_entry *scope);
+ZEND_API zend_result zend_get_attribute_value_in_runtime_module(zval *ret, const zend_attribute *attr, uint32_t i, zend_class_entry *scope, zend_runtime_module *runtime_module);
 ZEND_API zend_result zend_get_attribute_object(zval *out, zend_class_entry *attribute_ce, zend_attribute *attribute_data, zend_class_entry *scope, zend_string *filename);
+ZEND_API zend_result zend_get_attribute_object_in_runtime_module(zval *out, zend_class_entry *attribute_ce, zend_attribute *attribute_data, zend_class_entry *scope, zend_runtime_module *runtime_module, zend_string *filename);
 
 ZEND_API zend_string *zend_get_attribute_target_names(uint32_t targets);
 ZEND_API bool zend_is_attribute_repeated(const HashTable *attributes, const zend_attribute *attr);

@@ -32,6 +32,8 @@
 #include "zend_frameless_function.h"
 #include "zend_property_hooks.h"
 
+typedef struct _zend_runtime_module zend_runtime_module;
+
 #define SET_UNUSED(op) do { \
 	op ## _type = IS_UNUSED; \
 	op.num = (uint32_t) -1; \
@@ -207,6 +209,7 @@ typedef struct _zend_oparray_context {
 	zend_string *active_property_info_name;
 	zend_property_hook_kind active_property_hook_kind;
 	bool       in_jmp_frameless_branch;
+	bool       in_finally;
 	bool has_assigned_to_http_response_header;
 } zend_oparray_context;
 
@@ -474,6 +477,7 @@ typedef struct _zend_property_info {
 	zend_type type;
 	const zend_property_info *prototype;
 	zend_function **hooks;
+	zend_runtime_module *runtime_module;
 } zend_property_info;
 
 #define OBJ_PROP(obj, offset) \
@@ -493,6 +497,7 @@ typedef struct _zend_class_constant {
 	HashTable *attributes;
 	zend_class_entry *ce;
 	zend_type type;
+	zend_runtime_module *runtime_module;
 } zend_class_constant;
 
 #define ZEND_CLASS_CONST_FLAGS(c) Z_CONSTANT_FLAGS((c)->value)
@@ -546,6 +551,7 @@ struct _zend_op_array {
 	uint32_t T;         /* number of temporary variables */
 	uint32_t fn_flags2;
 	const zend_property_info *prop_info; /* The corresponding prop_info if this is a hook. */
+	zend_runtime_module *runtime_module;
 	/* END of common elements */
 
 	uint32_t cache_size; /* number of run_time_cache_slots * sizeof(void*) */
@@ -606,6 +612,7 @@ typedef struct _zend_internal_function {
 	uint32_t T;         /* number of temporary variables */
 	uint32_t fn_flags2;
 	const zend_property_info *prop_info; /* The corresponding prop_info if this is a hook. */
+	zend_runtime_module *runtime_module;
 	/* END of common elements */
 
 	zif_handler handler;
@@ -636,6 +643,7 @@ union _zend_function {
 		uint32_t T;         /* number of temporary variables */
 		uint32_t fn_flags2;
 		const zend_property_info *prop_info; /* The corresponding prop_info if this is a hook. */
+		zend_runtime_module *runtime_module;
 	} common;
 
 	zend_op_array op_array;
@@ -648,10 +656,12 @@ struct _zend_execute_data {
 	zval                *return_value;
 	zend_function       *func;             /* executed function              */
 	zval                 This;             /* this + call_info + num_args    */
+	zend_runtime_module *runtime_module;
 	zend_execute_data   *prev_execute_data;
 	zend_array          *symbol_table;
 	void               **run_time_cache;   /* cache op_array->run_time_cache */
 	zend_array          *extra_named_params;
+	bool                 has_explicit_runtime_module;
 };
 
 #define ZEND_CALL_HAS_THIS           IS_OBJECT_EX
@@ -958,12 +968,14 @@ struct _zend_arena;
 ZEND_API zend_op_array *compile_file(zend_file_handle *file_handle, int type);
 ZEND_API zend_op_array *compile_string(zend_string *source_string, const char *filename, zend_compile_position position);
 ZEND_API zend_op_array *compile_filename(int type, zend_string *filename);
+ZEND_API zend_op_array *zend_compile_ast(zend_ast *ast, int type, zend_string *filename);
 ZEND_API zend_ast *zend_compile_string_to_ast(
 		zend_string *code, struct _zend_arena **ast_arena, zend_string *filename);
 ZEND_API zend_result zend_execute_scripts(int type, zval *retval, int file_count, ...);
 ZEND_API zend_result zend_execute_script(int type, zval *retval, zend_file_handle *file_handle);
 ZEND_API zend_result open_file_for_scanning(zend_file_handle *file_handle);
 ZEND_API void init_op_array(zend_op_array *op_array, zend_function_type type, int initial_ops_size);
+ZEND_API void zend_init_op_array_extension_handles(zend_op_array *op_array);
 ZEND_API void destroy_op_array(zend_op_array *op_array);
 ZEND_API void zend_destroy_static_vars(zend_op_array *op_array);
 ZEND_API void zend_destroy_file_handle(zend_file_handle *file_handle);
@@ -1119,7 +1131,7 @@ ZEND_API zend_string *zend_type_to_string(zend_type type);
 
 #define ZEND_THROW_IS_EXPR 1u
 
-#define ZEND_FCALL_MAY_HAVE_EXTRA_NAMED_PARAMS 1
+#define ZEND_FCALL_MAY_HAVE_EXTRA_NAMED_PARAMS (1<<0)
 
 /* The send mode, the is_variadic, the is_promoted, and the is_tentative flags are stored as part of zend_type */
 #define _ZEND_SEND_MODE_SHIFT _ZEND_TYPE_EXTRA_FLAGS_SHIFT

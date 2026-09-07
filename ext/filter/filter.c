@@ -25,7 +25,6 @@
 
 ZEND_DECLARE_MODULE_GLOBALS(filter)
 
-#include "zend_attributes.h"
 #include "filter_private.h"
 #include "filter_arginfo.h"
 #include "zend_exceptions.h"
@@ -378,15 +377,18 @@ static unsigned int php_sapi_filter(int arg, const char *var, char **val, size_t
 	}
 
 	if (retval) {
+		zend_string *tmp_str;
+		zend_string *str = zval_get_tmp_string(&new_var, &tmp_str);
 		if (new_val_len) {
-			*new_val_len = Z_STRLEN(new_var);
+			*new_val_len = ZSTR_LEN(str);
 		}
 		efree(*val);
-		if (Z_STRLEN(new_var)) {
-			*val = estrndup(Z_STRVAL(new_var), Z_STRLEN(new_var));
+		if (ZSTR_LEN(str)) {
+			*val = estrndup(ZSTR_VAL(str), ZSTR_LEN(str));
 		} else {
 			*val = estrdup("");
 		}
+		zend_tmp_string_release(tmp_str);
 		zval_ptr_dtor(&new_var);
 	}
 

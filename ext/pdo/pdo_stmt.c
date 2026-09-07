@@ -1589,7 +1589,7 @@ PHP_METHOD(PDOStatement, getColumnMeta)
 	/* add stock items */
 	col = &stmt->columns[colno];
 	add_assoc_str(return_value, "name", zend_string_copy(col->name));
-	add_assoc_long(return_value, "len", col->maxlen); /* FIXME: unsigned ? */
+	add_assoc_long(return_value, "len", col->maxlen);
 	add_assoc_long(return_value, "precision", col->precision);
 }
 /* }}} */
@@ -1624,13 +1624,15 @@ bool pdo_stmt_setup_fetch_mode(pdo_stmt_t *stmt, zend_long mode, uint32_t mode_a
 
 	pdo_stmt_free_default_fetch_mode(stmt);
 
-	stmt->default_fetch_type = PDO_FETCH_BOTH;
+	stmt->default_fetch_type = stmt->dbh->default_fetch_type;
 
 	flags = mode & PDO_FETCH_FLAGS;
 
 	if (!pdo_verify_fetch_mode(stmt->default_fetch_type, mode, mode_arg_num, false)) {
 		return false;
 	}
+
+	bool use_default = (mode & ~PDO_FETCH_FLAGS) == PDO_FETCH_USE_DEFAULT;
 
 	switch (mode & ~PDO_FETCH_FLAGS) {
 		case PDO_FETCH_USE_DEFAULT:
@@ -1747,7 +1749,9 @@ bool pdo_stmt_setup_fetch_mode(pdo_stmt_t *stmt, zend_long mode, uint32_t mode_a
 			return false;
 	}
 
-	stmt->default_fetch_type = mode;
+	if (!use_default) {
+		stmt->default_fetch_type = mode;
+	}
 
 	return true;
 }
@@ -1943,12 +1947,9 @@ static void dbstmt_prop_delete(zend_object *object, zend_string *name, void **ca
 static zend_function *dbstmt_method_get(zend_object **object_pp, zend_string *method_name, const zval *key)
 {
 	zend_function *fbc = NULL;
-	zend_string *lc_method_name;
 	zend_object *object = *object_pp;
 
-	lc_method_name = zend_string_tolower(method_name);
-
-	if ((fbc = zend_hash_find_ptr(&object->ce->function_table, lc_method_name)) == NULL) {
+	if ((fbc = zend_hash_find_ptr_lc(&object->ce->function_table, method_name)) == NULL) {
 		pdo_stmt_t *stmt = php_pdo_stmt_fetch_object(object);
 		/* instance not created by PDO object */
 		if (!stmt->dbh) {
@@ -1964,14 +1965,13 @@ static zend_function *dbstmt_method_get(zend_object **object_pp, zend_string *me
 			}
 		}
 
-		if ((fbc = zend_hash_find_ptr(stmt->dbh->cls_methods[PDO_DBH_DRIVER_METHOD_KIND_STMT], lc_method_name)) == NULL) {
+		if ((fbc = zend_hash_find_ptr_lc(stmt->dbh->cls_methods[PDO_DBH_DRIVER_METHOD_KIND_STMT], method_name)) == NULL) {
 			goto out;
 		}
 		/* got it */
 	}
 
 out:
-	zend_string_release_ex(lc_method_name, 0);
 	if (!fbc) {
 		fbc = zend_std_get_method(object_pp, method_name, key);
 	}

@@ -2032,6 +2032,7 @@ PHP_FUNCTION(socket_get_option)
 #endif
 
 	optlen = sizeof(other_val);
+	other_val = 0;
 
 	if (getsockopt(php_sock->bsd_socket, level, optname, (char*)&other_val, &optlen) != 0) {
 		PHP_SOCKET_ERROR(php_sock, "Unable to retrieve socket option", errno);
@@ -2057,6 +2058,10 @@ PHP_FUNCTION(socket_set_option)
 	DWORD						timeout;
 #else
 	struct					timeval tv;
+#endif
+#ifdef SO_ATTACH_REUSEPORT_CBPF
+	struct sock_filter cbpf[8] = {0};
+	struct sock_fprog bpfprog;
 #endif
 	zend_long					level, optname;
 	void 					*opt_ptr;
@@ -2154,7 +2159,7 @@ PHP_FUNCTION(socket_set_option)
 
 			// TCP_USER_TIMEOUT unsigned int
 			if (timeout < 0 || timeout > UINT_MAX) {
-				zend_argument_value_error(4, "must be of between 0 and %u", UINT_MAX);
+				zend_argument_value_error(4, "must be between 0 and %u", UINT_MAX);
 				RETURN_THROWS();
 			}
 
@@ -2211,7 +2216,7 @@ PHP_FUNCTION(socket_set_option)
 			}
 
 			if (val_linger < 0 || val_linger > USHRT_MAX) {
-				zend_argument_value_error(4, "\"%s\" must be between 0 and %d", l_linger, USHRT_MAX);
+				zend_argument_value_error(4, "\"%s\" must be between 0 and %u", l_linger_key, USHRT_MAX);
 				RETURN_THROWS();
 			}
 
@@ -2336,17 +2341,28 @@ PHP_FUNCTION(socket_set_option)
 
 #ifdef SO_ATTACH_REUSEPORT_CBPF
 		case SO_ATTACH_REUSEPORT_CBPF: {
+			if (level != SOL_SOCKET) {
+				php_error_docref(NULL, E_WARNING, "Invalid level");
+				RETURN_FALSE;
+			}
+			if (Z_TYPE_P(arg4) != IS_LONG) {
+				zend_argument_type_error(4, "must be of type int when argument #3 ($option) is SO_ATTACH_REUSEPORT_CBPF, %s given", zend_zval_value_name(arg4));
+				RETURN_THROWS();
+			}
 			zend_long cbpf_val = zval_get_long(arg4);
 
 			if (!cbpf_val) {
+#ifdef SO_DETACH_REUSEPORT_BPF
 				ov = 1;
 				optlen = sizeof(ov);
 				opt_ptr = &ov;
-				optname = SO_DETACH_BPF;
+				optname = SO_DETACH_REUSEPORT_BPF;
+#else
+				php_error_docref(NULL, E_WARNING, "Detaching a reuseport CBPF filter is unsupported");
+				RETURN_FALSE;
+#endif
 			} else {
 				uint32_t k = (uint32_t)cbpf_val;
-				static struct sock_filter cbpf[8] = {0};
-				static struct sock_fprog bpfprog;
 
 				switch (k) {
 					case SKF_AD_CPU:
@@ -2375,8 +2391,8 @@ PHP_FUNCTION(socket_set_option)
 
 			// UDP segmentation offload maximum size or 0 to disable it
 			if (ov < 0 || ov > USHRT_MAX) {
-				zend_argument_value_error(4, "must be of between 0 and %u", USHRT_MAX);
-				RETURN_FALSE;
+				zend_argument_value_error(4, "must be between 0 and %u", USHRT_MAX);
+				RETURN_THROWS();
 			}
 
 			optlen = sizeof(ov);
@@ -2645,6 +2661,7 @@ PHP_FUNCTION(socket_import_stream)
 	retsock = Z_SOCKET_P(return_value);
 
 	if (!socket_import_file_descriptor(socket, retsock)) {
+		retsock->bsd_socket = -1;
 		zval_ptr_dtor(return_value);
 		RETURN_FALSE;
 	}

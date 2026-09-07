@@ -17,6 +17,8 @@
 #include "php_incomplete_class.h"
 #include "zend_portability.h"
 #include "zend_exceptions.h"
+#include "zend_objects.h"
+#include "zend_runtime_module.h"
 
 /* {{{ reference-handling for unserializer: var_* */
 #define VAR_ENTRIES_MAX 1018     /* 1024 - offsetof(php_unserialize_data, entries) / sizeof(void*) */
@@ -300,6 +302,7 @@ PHPAPI void var_destroy(php_unserialize_data_t *var_hashx)
 					zval param;
 					ZVAL_COPY(&param, &var_dtor_hash->data[i + 1]);
 
+					zend_object_set_properties_reinitable(Z_OBJ_P(zv), /* reinitable */ true);
 					BG(serialize_lock)++;
 					zend_call_known_instance_method_with_1_params(
 						Z_OBJCE_P(zv)->__unserialize, Z_OBJ_P(zv), NULL, &param);
@@ -308,6 +311,7 @@ PHPAPI void var_destroy(php_unserialize_data_t *var_hashx)
 						GC_ADD_FLAGS(Z_OBJ_P(zv), IS_OBJ_DESTRUCTOR_CALLED);
 					}
 					BG(serialize_lock)--;
+					zend_object_set_properties_reinitable(Z_OBJ_P(zv), /* reinitable */ false);
 					zval_ptr_dtor(&param);
 				} else {
 					GC_ADD_FLAGS(Z_OBJ_P(zv), IS_OBJ_DESTRUCTOR_CALLED);
@@ -689,11 +693,7 @@ second_try:
 
 		if (!php_var_unserialize_internal(data, p, max, var_hash)) {
 			if (info) {
-				if (Z_ISREF_P(data)) {
-					ZEND_REF_ADD_TYPE_SOURCE(Z_REF_P(data), info);
-				} else {
-					var_restore_prop_default(var_hash, obj, info, data);
-				}
+				var_restore_prop_default(var_hash, obj, info, data);
 			}
 			goto failure;
 		}
@@ -1147,6 +1147,7 @@ object ":" uiv ":" ["]	{
 	bool incomplete_class = 0;
 	bool custom_object = 0;
 	bool has_unserialize = 0;
+	bool use_class_cache;
 
 	zval user_func;
 	zval retval;
@@ -1193,11 +1194,12 @@ object ":" uiv ":" ["]	{
 	}
 
 	class_name = zend_string_init_interned(str, len, 0);
+	use_class_cache = !zend_runtime_context_is_module_sensitive(zend_get_current_runtime_context());
 
 	do {
 		zend_string *lc_name;
 
-		if (!(*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
+		if (use_class_cache && !(*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
 			ce = ZSTR_GET_CE_CACHE(class_name);
 			if (ce) {
 				break;
@@ -1216,7 +1218,7 @@ object ":" uiv ":" ["]	{
 			break;
 		}
 
-		if ((*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
+		if (use_class_cache && (*var_hash)->allowed_classes && ZSTR_HAS_CE_CACHE(class_name)) {
 			ce = ZSTR_GET_CE_CACHE(class_name);
 			if (ce) {
 				zend_string_release_ex(lc_name, 0);
@@ -1224,7 +1226,7 @@ object ":" uiv ":" ["]	{
 			}
 		}
 
-		ce = zend_hash_find_ptr(EG(class_table), lc_name);
+		ce = zend_hash_find_ptr(RMG(class_table), lc_name);
 		if (ce
 		 && (ce->ce_flags & ZEND_ACC_LINKED)
 		 && !(ce->ce_flags & ZEND_ACC_ANON_CLASS)) {
@@ -1253,14 +1255,14 @@ object ":" uiv ":" ["]	{
 		}
 
 		/* Check for unserialize callback */
-		if ((PG(unserialize_callback_func) == NULL) || (PG(unserialize_callback_func)[0] == '\0')) {
+		if (PG(unserialize_callback_func) == NULL || zend_string_equals(PG(unserialize_callback_func), zend_empty_string)) {
 			incomplete_class = 1;
 			ce = PHP_IC_ENTRY;
 			break;
 		}
 
 		/* Call unserialize callback */
-		ZVAL_STRING(&user_func, PG(unserialize_callback_func));
+		ZVAL_STR(&user_func, zend_string_dup(PG(unserialize_callback_func), false));
 
 		ZVAL_STR(&args[0], class_name);
 		BG(serialize_lock)++;

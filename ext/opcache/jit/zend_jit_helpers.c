@@ -18,6 +18,13 @@
 #include "Zend/zend_types.h"
 #include "Zend/zend_API.h"
 
+static const void *ZEND_FASTCALL zend_jit_runtime_module_fallback_handler(const zend_op *opline)
+{
+	zend_op vm_opline = *opline;
+	zend_vm_set_opcode_handler(&vm_opline);
+	return vm_opline.handler;
+}
+
 static ZEND_COLD void undef_result_after_exception(void) {
 	const zend_op *opline = EG(opline_before_exception);
 	ZEND_ASSERT(EG(exception));
@@ -1974,7 +1981,8 @@ static bool ZEND_FASTCALL zend_jit_verify_arg_slow(zval *arg, zend_arg_info *arg
 	zend_execute_data *execute_data = EG(current_execute_data);
 	const zend_op *opline = EX(opline);
 	bool ret = zend_check_user_type_slow(
-		&arg_info->type, arg, /* ref */ NULL, /* is_return_type */ false);
+		&arg_info->type, arg, /* ref */ NULL, /* current_frame */ false,
+		EX(func)->common.runtime_module, EX(func)->common.scope);
 	if (UNEXPECTED(!ret)) {
 		zend_verify_arg_error(EX(func), arg_info, opline->op1.num, arg);
 		return false;
@@ -1991,7 +1999,8 @@ static void ZEND_FASTCALL zend_jit_verify_return_slow(zval *arg, const zend_op_a
 		}
 	}
 	if (UNEXPECTED(!zend_check_user_type_slow(
-			&arg_info->type, arg, /* ref */ NULL, /* is_return_type */ true))) {
+			&arg_info->type, arg, /* ref */ NULL, /* current_frame */ true,
+			op_array->runtime_module, op_array->scope))) {
 		zend_verify_return_error((zend_function*)op_array, arg);
 	}
 }

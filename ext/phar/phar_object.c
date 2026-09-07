@@ -25,6 +25,7 @@
 #include "main/SAPI.h"
 #include "zend_exceptions.h"
 #include "zend_interfaces.h"
+#include "zend_runtime_module.h"
 
 static zend_class_entry *phar_ce_archive;
 static zend_class_entry *phar_ce_data;
@@ -246,7 +247,7 @@ static phar_action_status phar_file_action(phar_archive_data *phar, phar_entry_i
 			PHAR_G(cwd_len) = 0;
 
 			ZVAL_NULL(&dummy);
-			if (zend_hash_str_add(&EG(included_files), name, name_len, &dummy) != NULL) {
+			if (zend_hash_str_add(RMG(included_files), name, name_len, &dummy) != NULL) {
 				if ((cwd = zend_memrchr(entry, '/', entry_len))) {
 					PHAR_G(cwd_init) = 1;
 					if (entry == cwd) {
@@ -265,7 +266,7 @@ static phar_action_status phar_file_action(phar_archive_data *phar, phar_entry_i
 				new_op_array = zend_compile_file(&file_handle, ZEND_REQUIRE);
 
 				if (!new_op_array) {
-					zend_hash_str_del(&EG(included_files), name, name_len);
+					zend_hash_str_del(RMG(included_files), name, name_len);
 				}
 			} else {
 				efree(name);
@@ -633,9 +634,9 @@ PHP_METHOD(Phar, webPhar)
 				IS_STRING == Z_TYPE_P(z_path_info)) {
 				entry_len = Z_STRLEN_P(z_path_info);
 				entry = estrndup(Z_STRVAL_P(z_path_info), entry_len);
-				path_info = emalloc(Z_STRLEN_P(z_script_name) + entry_len + 1);
-				memcpy(path_info, Z_STRVAL_P(z_script_name), Z_STRLEN_P(z_script_name));
-				memcpy(path_info + Z_STRLEN_P(z_script_name), entry, entry_len + 1);
+				path_info = zend_cstr_concat(
+					Z_STRVAL_P(z_script_name), Z_STRLEN_P(z_script_name),
+					entry, entry_len);
 				free_pathinfo = 1;
 			} else {
 				entry_len = 0;
@@ -4136,7 +4137,7 @@ ZEND_ATTRIBUTE_NONNULL static zend_result phar_extract_file(bool overwrite, phar
 	}
 
 	if (php_check_open_basedir(fullpath)) {
-		spprintf(error, 4096, "Cannot extract \"%s\" to \"%s\", openbasedir/safe mode restrictions in effect", ZSTR_VAL(entry->filename), fullpath);
+		spprintf(error, 4096, "Cannot extract \"%s\" to \"%s\", open_basedir restrictions in effect", ZSTR_VAL(entry->filename), fullpath);
 		efree(fullpath);
 		efree(new_state.cwd);
 		return FAILURE;
@@ -4251,7 +4252,7 @@ ZEND_ATTRIBUTE_NONNULL_ARGS(1, 3, 5) static int extract_helper(const phar_archiv
 			if (FAILURE == phar_extract_file(overwrite, entry, path_to, error)) return -1;
 			extracted++;
 		} ZEND_HASH_FOREACH_END();
-	} else if (ZSTR_LEN(search) > 0 && '/' == ZSTR_VAL(search)[ZSTR_LEN(search) - 1]) {
+	} else if (zend_string_ends_with_literal(search, "/")) {
 		/* ends in "/" -- extract all entries having that prefix */
 		ZEND_HASH_MAP_FOREACH_PTR(&archive->manifest, entry) {
 			if (!zend_string_starts_with(entry->filename, search)) continue;

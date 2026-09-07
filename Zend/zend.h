@@ -148,6 +148,8 @@ C23_ENUM(zend_class_type, uint8_t) {
 	ZEND_USER_CLASS = 2,
 };
 
+typedef struct _zend_runtime_module zend_runtime_module;
+
 struct _zend_class_entry {
 	zend_class_type type;
 	zend_string *name;
@@ -239,6 +241,7 @@ struct _zend_class_entry {
 			struct _zend_module_entry *module;
 		} internal;
 	} info;
+	zend_runtime_module *runtime_module;
 };
 
 typedef union {
@@ -446,7 +449,6 @@ typedef struct {
 } zend_error_handling;
 
 BEGIN_EXTERN_C()
-ZEND_API void zend_save_error_handling(zend_error_handling *current);
 ZEND_API void zend_replace_error_handling(zend_error_handling_t error_handling, zend_class_entry *exception_class, zend_error_handling *current);
 ZEND_API void zend_restore_error_handling(const zend_error_handling *saved);
 ZEND_API void zend_begin_record_errors(void);

@@ -31,10 +31,9 @@
 #include "ext/standard/info.h"
 #include "ext/session/php_session.h"
 #include "zend_exceptions.h"
-#include "zend_attributes.h"
-#include "zend_enum.h"
 #include "zend_ini.h"
 #include "zend_operators.h"
+#include "zend_runtime_module.h"
 #include "ext/standard/php_dns.h"
 #include "ext/standard/php_uuencode.h"
 #include "ext/standard/crc32_x86.h"
@@ -121,6 +120,7 @@ PHPAPI php_basic_globals basic_globals;
 typedef struct _user_tick_function_entry {
 	zend_fcall_info_cache fci_cache;
 	zval *params;
+	zend_runtime_module *runtime_module;
 	uint32_t param_count;
 	bool calling;
 } user_tick_function_entry;
@@ -1255,7 +1255,7 @@ PHP_FUNCTION(get_current_user)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
 
-	RETURN_STRING(php_get_current_user());
+	RETURN_STR_COPY(php_get_current_user());
 }
 /* }}} */
 
@@ -1434,7 +1434,7 @@ PHP_FUNCTION(error_get_last)
 		ZVAL_STR_COPY(&tmp, PG(last_error_file));
 		zend_hash_update(Z_ARR_P(return_value), ZSTR_KNOWN(ZEND_STR_FILE), &tmp);
 
-		ZVAL_LONG(&tmp, PG(last_error_lineno));
+		ZVAL_LONG(&tmp, (zend_long)PG(last_error_lineno));
 		zend_hash_update(Z_ARR_P(return_value), ZSTR_KNOWN(ZEND_STR_LINE), &tmp);
 
 		if (!Z_ISUNDEF(EG(last_fatal_error_backtrace))) {
@@ -1613,7 +1613,13 @@ static int user_shutdown_function_call(zval *zv) /* {{{ */
 {
 	php_shutdown_function_entry *entry = Z_PTR_P(zv);
 
-	zend_call_known_fcc(&entry->fci_cache, NULL, entry->param_count, entry->params, NULL);
+	if (entry->fci_cache.function_handler->type == ZEND_INTERNAL_FUNCTION) {
+		zend_call_known_fcc_in_runtime_module(
+			&entry->fci_cache, entry->runtime_module, NULL,
+			entry->param_count, entry->params, NULL);
+	} else {
+		zend_call_known_fcc(&entry->fci_cache, NULL, entry->param_count, entry->params, NULL);
+	}
 	return 0;
 }
 /* }}} */
@@ -1623,7 +1629,13 @@ static void user_tick_function_call(user_tick_function_entry *tick_fe) /* {{{ */
 	/* Prevent re-entrant calls to the same user ticks function */
 	if (!tick_fe->calling) {
 		tick_fe->calling = true;
-		zend_call_known_fcc(&tick_fe->fci_cache, NULL, tick_fe->param_count, tick_fe->params, NULL);
+		if (tick_fe->fci_cache.function_handler->type == ZEND_INTERNAL_FUNCTION) {
+			zend_call_known_fcc_in_runtime_module(
+				&tick_fe->fci_cache, tick_fe->runtime_module, NULL,
+				tick_fe->param_count, tick_fe->params, NULL);
+		} else {
+			zend_call_known_fcc(&tick_fe->fci_cache, NULL, tick_fe->param_count, tick_fe->params, NULL);
+		}
 		tick_fe->calling = false;
 	}
 }
@@ -1709,6 +1721,7 @@ PHPAPI bool register_user_shutdown_function(const char *function_name, size_t fu
 		zend_hash_init(BG(user_shutdown_function_names), 0, NULL, user_shutdown_function_dtor, 0);
 	}
 
+	shutdown_function_entry->runtime_module = zend_get_current_runtime_module();
 	zend_hash_str_update_mem(BG(user_shutdown_function_names), function_name, function_len, shutdown_function_entry, sizeof(php_shutdown_function_entry));
 	return 1;
 }
@@ -1731,6 +1744,7 @@ PHPAPI bool append_user_shutdown_function(php_shutdown_function_entry *shutdown_
 		zend_hash_init(BG(user_shutdown_function_names), 0, NULL, user_shutdown_function_dtor, 0);
 	}
 
+	shutdown_function_entry->runtime_module = zend_get_current_runtime_module();
 	return zend_hash_next_index_insert_mem(BG(user_shutdown_function_names), shutdown_function_entry, sizeof(php_shutdown_function_entry)) != NULL;
 }
 /* }}} */
@@ -2291,6 +2305,7 @@ PHP_FUNCTION(register_tick_function)
 	}
 
 	zend_fcc_addref(&tick_fe.fci_cache);
+	tick_fe.runtime_module = zend_get_current_runtime_module();
 	if (tick_fe.param_count) {
 		ZEND_ASSERT(params != NULL);
 		tick_fe.params = (zval *) safe_emalloc(tick_fe.param_count, sizeof(zval), 0);

@@ -27,12 +27,13 @@
 
 #include "ext/standard/info.h"
 #include "ext/standard/file.h"
-#include "Zend/zend_attributes.h"
 #include "Zend/zend_exceptions.h"
 
 #include "php_ftp.h"
 #include "ftp.h"
 #include "ftp_arginfo.h"
+
+#define PHP_FTP_TIMEOUT_SEC_MAX ((uint64_t)((double) PHP_TIMEOUT_ULL_MAX / 1000000.0))
 
 static zend_class_entry *php_ftp_ce = NULL;
 static zend_object_handlers ftp_object_handlers;
@@ -143,15 +144,13 @@ PHP_FUNCTION(ftp_connect)
 		RETURN_THROWS();
 	}
 
-	const uint64_t timeoutmax = (uint64_t)((double) PHP_TIMEOUT_ULL_MAX / 1000000.0);
-
 	if (timeout_sec <= 0) {
 		zend_argument_value_error(3, "must be greater than 0");
 		RETURN_THROWS();
 	}
 
-	if (timeout_sec >= timeoutmax) {
-		zend_argument_value_error(3, "must be less than " ZEND_ULONG_FMT, timeoutmax);
+	if (timeout_sec >= PHP_FTP_TIMEOUT_SEC_MAX) {
+		zend_argument_value_error(3, "must be less than " ZEND_ULONG_FMT, PHP_FTP_TIMEOUT_SEC_MAX);
 		RETURN_THROWS();
 	}
 
@@ -189,6 +188,11 @@ PHP_FUNCTION(ftp_ssl_connect)
 
 	if (timeout_sec <= 0) {
 		zend_argument_value_error(3, "must be greater than 0");
+		RETURN_THROWS();
+	}
+
+	if (timeout_sec >= PHP_FTP_TIMEOUT_SEC_MAX) {
+		zend_argument_value_error(3, "must be less than " ZEND_ULONG_FMT, PHP_FTP_TIMEOUT_SEC_MAX);
 		RETURN_THROWS();
 	}
 
@@ -650,6 +654,11 @@ PHP_FUNCTION(ftp_nb_fget)
 	}
 
 	/* configuration */
+	if (ftp->in_use) {
+		zend_throw_error(NULL, "Cannot start a transfer while another transfer is in progress");
+		RETURN_THROWS();
+	}
+
 	ftp->direction = 0;   /* recv */
 	ftp->closestream = 0; /* do not close */
 
@@ -760,6 +769,10 @@ PHP_FUNCTION(ftp_nb_get)
 		RETURN_THROWS();
 	}
 	GET_FTPBUF(ftp, z_ftp);
+	if (ftp->in_use) {
+		zend_throw_error(NULL, "Cannot start a transfer while another transfer is in progress");
+		RETURN_THROWS();
+	}
 	XTYPE(xtype, mode);
 
 	/* ignore autoresume if autoseek is switched off */
@@ -797,8 +810,8 @@ PHP_FUNCTION(ftp_nb_get)
 	ftp->closestream = true; /* do close */
 
 	if ((ret = ftp_nb_get(ftp, outstream, remote, remote_len, xtype, resumepos)) == PHP_FTP_FAILED) {
-		php_stream_close(outstream);
 		ftp->stream = NULL;
+		php_stream_close(outstream);
 		VCWD_UNLINK(local);
 		if (*ftp->inbuf) {
 			php_error_docref(NULL, E_WARNING, "%s", ftp->inbuf);
@@ -807,8 +820,8 @@ PHP_FUNCTION(ftp_nb_get)
 	}
 
 	if (ret == PHP_FTP_FINISHED){
-		php_stream_close(outstream);
 		ftp->stream = NULL;
+		php_stream_close(outstream);
 	}
 
 	RETURN_LONG(ret);
@@ -946,6 +959,11 @@ PHP_FUNCTION(ftp_nb_fput)
 	}
 
 	/* configuration */
+	if (ftp->in_use) {
+		zend_throw_error(NULL, "Cannot start a transfer while another transfer is in progress");
+		RETURN_THROWS();
+	}
+
 	ftp->direction = true;   /* send */
 	ftp->closestream = false; /* do not close */
 
@@ -1086,6 +1104,12 @@ PHP_FUNCTION(ftp_nb_put)
 		}
 	}
 
+	if (ftp->in_use) {
+		php_stream_close(instream);
+		zend_throw_error(NULL, "Cannot start a transfer while another transfer is in progress");
+		RETURN_THROWS();
+	}
+
 	/* configuration */
 	ftp->direction = true;   /* send */
 	ftp->closestream = true; /* do close */
@@ -1093,8 +1117,8 @@ PHP_FUNCTION(ftp_nb_put)
 	ret = ftp_nb_put(ftp, remote, remote_len, instream, xtype, startpos);
 
 	if (ret != PHP_FTP_MOREDATA) {
-		php_stream_close(instream);
 		ftp->stream = NULL;
+		php_stream_close(instream);
 	}
 
 	if (ret == PHP_FTP_FAILED) {
@@ -1229,6 +1253,10 @@ PHP_FUNCTION(ftp_close)
 
 	obj = ftp_object_from_zend_object(Z_OBJ_P(z_ftp));
 	if (obj->ftp) {
+		if (obj->ftp->in_use) {
+			zend_throw_error(NULL, "Cannot close FTP\\Connection while a transfer is in progress");
+			RETURN_THROWS();
+		}
 		success = ftp_quit(obj->ftp);
 		ftp_close(obj->ftp);
 		obj->ftp = NULL;
@@ -1258,6 +1286,10 @@ PHP_FUNCTION(ftp_set_option)
 			}
 			if (Z_LVAL_P(z_value) <= 0) {
 				zend_argument_value_error(3, "must be greater than 0 for the FTP_TIMEOUT_SEC option");
+				RETURN_THROWS();
+			}
+			if ((uint64_t) Z_LVAL_P(z_value) >= PHP_FTP_TIMEOUT_SEC_MAX) {
+				zend_argument_value_error(3, "must be less than " ZEND_ULONG_FMT " for the FTP_TIMEOUT_SEC option", PHP_FTP_TIMEOUT_SEC_MAX);
 				RETURN_THROWS();
 			}
 			ftp->timeout_sec = Z_LVAL_P(z_value);

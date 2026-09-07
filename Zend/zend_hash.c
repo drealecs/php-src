@@ -2997,9 +2997,17 @@ static void zend_hash_sort_internal(HashTable *ht, sort_func_t sort, bucket_comp
 
 	IS_CONSISTENT(ht);
 
-	if (!(ht->nNumOfElements>1) && !(renumber && ht->nNumOfElements>0)) {
-		/* Doesn't require sorting */
-		return;
+	if (ht->nNumOfElements <= 1) {
+		if (!renumber || ht->nNumOfElements == 0) {
+			/* Doesn't require sorting */
+			return;
+		}
+		if (sort == zend_sort && HT_IS_PACKED(ht) && HT_IS_WITHOUT_HOLES(ht)) {
+			/* The single element already has the expected index. */
+			ht->nInternalPointer = 0;
+			ht->nNextFreeElement = 1;
+			return;
+		}
 	}
 
 	if (HT_IS_PACKED(ht)) {
@@ -3220,6 +3228,13 @@ ZEND_API int zend_hash_compare(HashTable *ht1, const HashTable *ht2, compare_fun
 	if (ht1 == ht2) {
 		return 0;
 	}
+
+#ifdef ZEND_CHECK_STACK_LIMIT
+	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
+		zend_throw_error(NULL, "Maximum call stack size reached during comparison");
+		return ZEND_UNCOMPARABLE;
+	}
+#endif
 
 	/* It's enough to protect only one of the arrays.
 	 * The second one may be referenced from the first and this may cause

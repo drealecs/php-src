@@ -28,6 +28,7 @@
 #include "zend_call_graph.h"
 #include "zend_inference.h"
 #include "zend_dump.h"
+#include "zend_runtime_module.h"
 #include "php.h"
 
 #ifndef ZEND_OPTIMIZER_MAX_REGISTERED_PASSES
@@ -280,6 +281,19 @@ bool zend_optimizer_update_op1_const(zend_op_array *op_array,
 		case ZEND_SEPARATE:
 		case ZEND_SEND_VAR_NO_REF:
 		case ZEND_SEND_VAR_NO_REF_EX:
+		case ZEND_ASSIGN_OP:
+		case ZEND_ASSIGN_DIM_OP:
+		case ZEND_ASSIGN_OBJ:
+		case ZEND_ASSIGN_OBJ_OP:
+		case ZEND_ASSIGN_OBJ_REF:
+		case ZEND_UNSET_OBJ:
+		case ZEND_FETCH_OBJ_W:
+		case ZEND_FETCH_OBJ_RW:
+		case ZEND_FETCH_OBJ_UNSET:
+		case ZEND_PRE_INC_OBJ:
+		case ZEND_PRE_DEC_OBJ:
+		case ZEND_POST_INC_OBJ:
+		case ZEND_POST_DEC_OBJ:
 			return false;
 		case ZEND_CATCH:
 			REQUIRES_STRING(val);
@@ -319,10 +333,6 @@ bool zend_optimizer_update_op1_const(zend_op_array *op_array,
 				opline->extended_value = alloc_cache_slots(op_array, 1);
 			}
 			zend_optimizer_add_literal_string(op_array, zend_string_tolower(Z_STR_P(val)));
-			break;
-		case ZEND_ASSIGN_OP:
-		case ZEND_ASSIGN_DIM_OP:
-		case ZEND_ASSIGN_OBJ_OP:
 			break;
 		case ZEND_ASSIGN_STATIC_PROP_OP:
 		case ZEND_ASSIGN_STATIC_PROP:
@@ -810,19 +820,30 @@ static bool zend_optimizer_ignore_function(zval *fbc_zv, const zend_string *file
 	}
 }
 
+static bool zend_optimizer_class_is_stable_internal(zend_string *lcname, const zval *ce_zv)
+{
+	const zend_class_entry *ce = Z_PTR_P(ce_zv);
+	return ce->type == ZEND_INTERNAL_CLASS
+		&& (Z_TYPE_P(ce_zv) != IS_ALIAS_PTR
+			|| zend_runtime_module_is_internal_class_alias(lcname, ce_zv));
+}
+
 zend_class_entry *zend_optimizer_get_class_entry(
 		const zend_script *script, const zend_op_array *op_array, zend_string *lcname) {
 	zend_class_entry *ce = script ? zend_hash_find_ptr(&script->class_table, lcname) : NULL;
 	if (ce) {
-		return ce;
+		return op_array && op_array->function_name ? NULL : ce;
 	}
 
 	zval *ce_zv = zend_hash_find(CG(class_table), lcname);
 	if (ce_zv && !zend_optimizer_ignore_class(ce_zv, op_array ? op_array->filename : NULL)) {
-		return Z_PTR_P(ce_zv);
+		ce = Z_PTR_P(ce_zv);
+		return op_array && op_array->function_name
+			&& !zend_optimizer_class_is_stable_internal(lcname, ce_zv) ? NULL : ce;
 	}
 
-	if (op_array && op_array->scope && zend_string_equals_ci(op_array->scope->name, lcname)) {
+	if (op_array && !op_array->function_name && op_array->scope
+			&& zend_string_equals_ci(op_array->scope->name, lcname)) {
 		return op_array->scope;
 	}
 
@@ -851,7 +872,8 @@ const zend_class_constant *zend_fetch_class_const_info(
 	const zend_class_entry *ce = NULL;
 	bool is_static_reference = false;
 
-	if (!opline || !op_array || opline->op2_type != IS_CONST || Z_TYPE_P(CRT_CONSTANT(opline->op2)) != IS_STRING) {
+	if (!opline || !op_array || (op_array->fn_flags & ZEND_ACC_CLOSURE)
+			|| opline->op2_type != IS_CONST || Z_TYPE_P(CRT_CONSTANT(opline->op2)) != IS_STRING) {
 		return NULL;
 	}
 	if (opline->op1_type == IS_CONST) {
@@ -909,10 +931,13 @@ zend_function *zend_optimizer_get_called_func(
 			zend_function *func;
 			zval *func_zv;
 			if (script && (func = zend_hash_find_ptr(&script->function_table, function_name)) != NULL) {
-				return func;
+				return op_array->function_name && func->type == ZEND_USER_FUNCTION
+					? NULL : func;
 			} else if ((func_zv = zend_hash_find(EG(function_table), function_name)) != NULL) {
 				if (!zend_optimizer_ignore_function(func_zv, op_array->filename)) {
-					return Z_PTR_P(func_zv);
+					func = Z_PTR_P(func_zv);
+					return op_array->function_name && func->type == ZEND_USER_FUNCTION
+						? NULL : func;
 				}
 			}
 			break;
@@ -924,10 +949,13 @@ zend_function *zend_optimizer_get_called_func(
 				zend_function *func;
 				zval *func_zv;
 				if (script && (func = zend_hash_find_ptr(&script->function_table, Z_STR_P(function_name)))) {
-					return func;
+					return op_array->function_name && func->type == ZEND_USER_FUNCTION
+						? NULL : func;
 				} else if ((func_zv = zend_hash_find(EG(function_table), Z_STR_P(function_name))) != NULL) {
 					if (!zend_optimizer_ignore_function(func_zv, op_array->filename)) {
-						return Z_PTR_P(func_zv);
+						func = Z_PTR_P(func_zv);
+						return op_array->function_name && func->type == ZEND_USER_FUNCTION
+							? NULL : func;
 					}
 				}
 			}
@@ -1052,7 +1080,10 @@ static void zend_optimize(zend_op_array      *op_array,
 	}
 
 	if (ctx->debug_level & ZEND_DUMP_BEFORE_OPTIMIZER) {
-		zend_dump_op_array(op_array, ZEND_DUMP_LIVE_RANGES, "before optimizer", NULL);
+		uint32_t additional_dump_flags = (ctx->debug_level & ZEND_DUMP_LINE_NUMBERS_PASSTHRU)
+			? ZEND_DUMP_LINE_NUMBERS
+			: 0;
+		zend_dump_op_array(op_array, ZEND_DUMP_LIVE_RANGES|additional_dump_flags, "before optimizer", NULL);
 	}
 
 	/* pass 1 (Simple local optimizations)
@@ -1463,14 +1494,13 @@ static void zend_optimize_op_array(zend_op_array      *op_array,
 
 static void zend_adjust_fcall_stack_size(const zend_op_array *op_array, const zend_optimizer_ctx *ctx)
 {
-	zend_function *func;
 	zend_op *opline;
 
 	opline = op_array->opcodes;
 	const zend_op* end = opline + op_array->last;
 	while (opline < end) {
 		if (opline->opcode == ZEND_INIT_FCALL) {
-			func = zend_hash_find_ptr(
+			const zend_function *func = zend_hash_find_ptr(
 				&ctx->script->function_table,
 				Z_STR_P(RT_CONSTANT(opline, opline->op2)));
 			if (func) {
