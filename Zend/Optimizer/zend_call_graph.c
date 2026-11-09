@@ -50,7 +50,10 @@ ZEND_API void zend_analyze_calls(zend_arena **arena, zend_script *script, uint32
 	ALLOCA_FLAG(use_heap);
 	bool is_prototype;
 
-	call_stack = do_alloca((op_array->last / 2) * sizeof(zend_call_info*), use_heap);
+	// Note: Reserve one call stack slot per operation. Each opcode pushes at
+	// most one entry to the call stack, and (with dead code elimination) it's
+	// possible to never pop from the stack.
+	call_stack = do_alloca(op_array->last * sizeof(zend_call_info*), use_heap);
 	call_info = NULL;
 	while (opline != end) {
 		switch (opline->opcode) {
@@ -124,6 +127,7 @@ ZEND_API void zend_analyze_calls(zend_arena **arena, zend_script *script, uint32
 			case ZEND_DO_UCALL:
 			case ZEND_DO_FCALL_BY_NAME:
 			case ZEND_CALLABLE_CONVERT:
+			case ZEND_CALLABLE_CONVERT_PARTIAL:
 				func_info->flags |= ZEND_FUNC_HAS_CALLS;
 				if (call_info) {
 					call_info->caller_call_opline = opline;
@@ -140,6 +144,7 @@ ZEND_API void zend_analyze_calls(zend_arena **arena, zend_script *script, uint32
 			case ZEND_SEND_VAR_NO_REF:
 			case ZEND_SEND_VAR_NO_REF_EX:
 			case ZEND_SEND_USER:
+			case ZEND_SEND_PLACEHOLDER:
 				if (call_info) {
 					if (opline->op2_type == IS_CONST) {
 						call_info->named_args = true;
@@ -263,7 +268,7 @@ ZEND_API zend_call_info **zend_build_call_map(zend_arena **arena, const zend_fun
 		return NULL;
 	}
 
-	map = zend_arena_calloc(arena, sizeof(zend_call_info *), op_array->last);
+	map = zend_arena_calloc(arena, op_array->last, sizeof(zend_call_info *));
 	for (call = info->callee_info; call; call = call->next_callee) {
 		map[call->caller_init_opline - op_array->opcodes] = call;
 		if (call->caller_call_opline) {

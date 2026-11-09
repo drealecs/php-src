@@ -5,6 +5,8 @@ class CliServerInfo {
     public function __construct(
         public string $docRoot,
         public $processHandle,
+        public $outputFile,
+        public int $port,
     ) {}
 }
 
@@ -16,8 +18,8 @@ function php_cli_server_start(
     $php_executable = getenv('TEST_PHP_EXECUTABLE') ?: PHP_BINARY;
     $error = null;
 
-    // Create dedicated doc root to avoid index.php clashes between tests.
-    $doc_root = __DIR__ . DIRECTORY_SEPARATOR . basename($_SERVER['PHP_SELF'], '.php');
+    // Create dedicated doc root to avoid index.php clashes between processes.
+    $doc_root = __DIR__ . DIRECTORY_SEPARATOR . basename($_SERVER['PHP_SELF'], '.php') . '-' . getmypid();
     @mkdir($doc_root);
 
     if ($code) {
@@ -118,7 +120,7 @@ function php_cli_server_start(
     define("PHP_CLI_SERVER_PORT", $port);
     define("PHP_CLI_SERVER_ADDRESS", PHP_CLI_SERVER_HOSTNAME.":".PHP_CLI_SERVER_PORT);
 
-    return new CliServerInfo($doc_root, $handle);
+    return new CliServerInfo($doc_root, $handle, $output_file, $port);
 }
 
 function php_cli_server_connect() {

@@ -352,6 +352,18 @@ static void zend_optimize_block(zend_basic_block *block, zend_op_array *op_array
 				}
 				break;
 
+			case ZEND_FAST_CALL:
+				if (opline->op2_type & (IS_TMP_VAR|IS_VAR)) {
+					/* OP2 holds the pending return value. A TMP normally has a single
+					 * consumer, but FAST_CALL does not consume it:
+					 * the RETURN behind it is the consumer, and
+					 * zend_dispatch_try_catch_finally_helper() destroys the value
+					 * through OP2 if the finally block throws. Propagating the source
+					 * into the RETURN therefore must not remove it. */
+					Tsource[VAR_NUM(opline->op2.var)] = NULL;
+				}
+				break;
+
 			case ZEND_SWITCH_LONG:
 			case ZEND_SWITCH_STRING:
 			case ZEND_MATCH:
@@ -648,7 +660,7 @@ optimize_type_check:
 					} else if (opline->op1_type == IS_TMP_VAR &&
 					           !zend_bitset_in(used_ext, VAR_NUM(opline->op1.var))) {
 						src = VAR_SOURCE(opline->op1);
-						if (src) {
+						if (src && (src->op1_type != IS_VAR)) {
 							if (src->opcode == ZEND_BOOL_NOT) {
 								VAR_SOURCE(opline->op1) = NULL;
 								COPY_NODE(opline->op1, src->op1);
@@ -692,7 +704,7 @@ optimize_type_check:
 					           (!zend_bitset_in(used_ext, VAR_NUM(opline->op1.var)) ||
 					            opline->result.var == opline->op1.var)) {
 						src = VAR_SOURCE(opline->op1);
-						if (src) {
+						if (src && (src->op1_type != IS_VAR)) {
 							if (src->opcode == ZEND_BOOL ||
 							    src->opcode == ZEND_QM_ASSIGN) {
 								VAR_SOURCE(opline->op1) = NULL;
@@ -1702,7 +1714,7 @@ static void zend_merge_blocks(const zend_op_array *op_array, const zend_cfg *cfg
 void zend_optimize_cfg(zend_op_array *op_array, zend_optimizer_ctx *ctx)
 {
 	zend_cfg cfg;
-	zend_basic_block *blocks, *end, *b;
+	zend_basic_block *blocks, *b;
 	int pass;
 	uint32_t bitset_len;
 	zend_bitset usage;
@@ -1730,7 +1742,7 @@ void zend_optimize_cfg(zend_op_array *op_array, zend_optimizer_ctx *ctx)
 	jmp_hitlist = zend_arena_alloc(&ctx->arena, cfg.blocks_count * sizeof(int));
 
 	blocks = cfg.blocks;
-	end = blocks + cfg.blocks_count;
+	const zend_basic_block *end = blocks + cfg.blocks_count;
 	for (pass = 0; pass < PASSES; pass++) {
 		opt_count = 0;
 

@@ -13,6 +13,7 @@
 */
 
 #include "php.h"
+#include "zend_interfaces.h"
 
 /* {{{ Returns the type of the variable */
 PHP_FUNCTION(gettype)
@@ -97,13 +98,11 @@ PHP_FUNCTION(settype)
 	} else {
 		ptr = Z_REFVAL_P(var);
 	}
-	if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_INTEGER))) {
+	if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_INTEGER))
+			|| zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_INT))) {
 		convert_to_long(ptr);
-	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_INT))) {
-		convert_to_long(ptr);
-	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_FLOAT))) {
-		convert_to_double(ptr);
-	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_DOUBLE))) {
+	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_FLOAT))
+			|| zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_DOUBLE))) {
 		convert_to_double(ptr);
 	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_STRING))) {
 		convert_to_string(ptr);
@@ -111,9 +110,8 @@ PHP_FUNCTION(settype)
 		convert_to_array(ptr);
 	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_OBJECT))) {
 		convert_to_object(ptr);
-	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_BOOL))) {
-		convert_to_boolean(ptr);
-	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_BOOLEAN))) {
+	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_BOOL))
+			|| zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_BOOLEAN))) {
 		convert_to_boolean(ptr);
 	} else if (zend_string_equals_ci(type, ZSTR_KNOWN(ZEND_STR_NULL_LOWERCASE))) {
 		convert_to_null(ptr);
@@ -458,6 +456,18 @@ PHP_FUNCTION(is_countable)
 		Z_PARAM_ZVAL(var)
 	ZEND_PARSE_PARAMETERS_END();
 
-	RETURN_BOOL(zend_is_countable(var));
+
+	switch (Z_TYPE_P(var)) {
+		case IS_ARRAY:
+			RETURN_TRUE;
+		case IS_OBJECT:
+			if (Z_OBJ_HT_P(var)->count_elements) {
+				RETURN_TRUE;
+			}
+
+			RETURN_BOOL(zend_class_implements_interface(Z_OBJCE_P(var), zend_ce_countable));
+		default:
+			RETURN_FALSE;
+	}
 }
 /* }}} */

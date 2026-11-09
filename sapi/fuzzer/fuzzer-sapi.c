@@ -28,6 +28,8 @@
 #include "fuzzer.h"
 #include "fuzzer-sapi.h"
 
+ZEND_TSRMLS_CACHE_DEFINE()
+
 static const char HARDCODED_INI[] =
 	"html_errors=0\n"
 	"implicit_flush=1\n"
@@ -46,7 +48,7 @@ static const char HARDCODED_INI[] =
 	"disable_functions=dl,mail,mb_send_mail,set_error_handler"
 	",shell_exec,exec,system,proc_open,popen,passthru,pcntl_exec"
 	",chdir,chgrp,chmod,chown,copy,file_put_contents,lchgrp,lchown,link,mkdir"
-	",move_uploaded_file,rename,rmdir,symlink,tempname,touch,unlink,fopen"
+	",move_uploaded_file,rename,rmdir,symlink,tempnam,touch,unlink,fopen"
 	/* Networking code likes to wait and wait. */
 	",fsockopen,pfsockopen"
 	",stream_socket_pair,stream_socket_client,stream_socket_server"
@@ -119,7 +121,6 @@ static sapi_module_struct fuzzer_module = {
 	register_variables,  /* register server variables */
 	log_message,         /* Log message */
 	NULL,                          /* Get request time */
-	NULL,                          /* Child terminate */
 
 	STANDARD_SAPI_MODULE_PROPERTIES
 };
@@ -150,6 +151,15 @@ int fuzzer_init_php(const char *extra_ini)
 	 * so disable lsan temporarily. */
 	__lsan_disable();
 #endif
+
+#ifdef ZTS
+	php_tsrm_startup();
+# ifdef PHP_WIN32
+	ZEND_TSRMLS_CACHE_UPDATE();
+# endif
+#endif
+
+	zend_signal_startup();
 
 	sapi_startup(&fuzzer_module);
 	fuzzer_module.phpinfo_as_text = 1;
@@ -212,6 +222,8 @@ void fuzzer_request_shutdown(void)
 			EG(exception) = NULL;
 		}
 
+		zend_mm_oom_info_dtor(&EG(delayed_oom));
+
 		/* Some fuzzers (like unserialize) may create circular structures. Make sure we free them.
 		 * Two calls are performed to handle objects with destructors. */
 		zend_gc_collect_cycles();
@@ -252,6 +264,10 @@ int fuzzer_shutdown_php(void)
 	php_module_shutdown();
 	sapi_shutdown();
 
+#ifdef ZTS
+	tsrm_shutdown();
+#endif
+
 	free((void *)fuzzer_module.ini_entries);
 	return SUCCESS;
 }
@@ -291,6 +307,12 @@ int fuzzer_do_request_from_buffer(
 		if (op_array) {
 			if (execute) {
 				zend_execute(op_array, NULL);
+			}
+			if (ZEND_HAS_OOM()) {
+				zend_handle_delayed_oom();
+			}
+			if (EG(exception)) {
+				zend_exception_error(EG(exception), E_WARNING);
 			}
 			zend_destroy_static_vars(op_array);
 			destroy_op_array(op_array);

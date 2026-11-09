@@ -31,7 +31,7 @@ CREDIT_LINE("GetText", "Alex Plotnick");
 CREDIT_LINE("GNU GMP support", "Stanislav Malyshev");
 CREDIT_LINE("Iconv", "Rui Hirokawa, Stig Bakken, Moriyoshi Koizumi");
 CREDIT_LINE("Input Filter", "Rasmus Lerdorf, Derick Rethans, Pierre-Alain Joye, Ilia Alshanetsky");
-CREDIT_LINE("Internationalization", "Ed Batutis, Vladimir Iordanov, Dmitry Lakhtyuk, Stanislav Malyshev, Vadim Savchuk, Kirti Velankar");
+CREDIT_LINE("Internationalization", "Ed Batutis, David Carlier, Weilin Du, Vladimir Iordanov, Dmitry Lakhtyuk, Stanislav Malyshev, Vadim Savchuk, Kirti Velankar");
 CREDIT_LINE("JSON", "Jakub Zelenka, Omar Kilani, Scott MacVicar");
 CREDIT_LINE("LDAP", "Amitay Isaacs, Eric Warnke, Rasmus Lerdorf, Gerrit Thomson, Stig Venaas");
 CREDIT_LINE("LIBXML", "Christian Stocker, Rob Richards, Marcus Boerger, Wez Furlong, Shane Caraveo");
@@ -51,7 +51,7 @@ CREDIT_LINE("PHP hash", "Sara Golemon, Rasmus Lerdorf, Stefan Esser, Michael Wal
 CREDIT_LINE("Posix", "Kristian Koehntopp");
 CREDIT_LINE("PostgreSQL driver for PDO", "Edin Kadribasic, Ilia Alshanetsky");
 CREDIT_LINE("PostgreSQL", "Jouni Ahto, Zeev Suraski, Yasuo Ohgaki, Chris Kings-Lynne");
-CREDIT_LINE("random", "Go Kudo, Tim Düsterhus, Guilliam Xavier, Christoph M. Becker, Jakub Zelenka, Bob Weinand, Máté Kocsis, and Original RNG implementators");
+CREDIT_LINE("random", "Go Kudo, Tim Düsterhus, Guilliam Xavier, Christoph M. Becker, Jakub Zelenka, Bob Weinand, Máté Kocsis, and Original RNG implementers");
 CREDIT_LINE("Readline", "Thies C. Arntzen");
 CREDIT_LINE("Reflection", "Marcus Boerger, Timm Friebe, George Schlossnagle, Andrei Zmievski, Johannes Schlueter");
 CREDIT_LINE("Sessions", "Sascha Schumann, Andrei Zmievski");

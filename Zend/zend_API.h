@@ -60,7 +60,7 @@ typedef struct _zend_fcall_info_cache {
 	zend_function *function_handler;
 	zend_class_entry *calling_scope;
 	zend_class_entry *called_scope;
-	zend_object *object; /* Instance of object for method calls */
+	zend_object *object; /* Pointer for object representing $this */
 	zend_object *closure; /* Closure reference, only if the callable *is* the object */
 } zend_fcall_info_cache;
 
@@ -289,41 +289,6 @@ typedef struct _zend_fcall_info_cache {
 		class_container.info.internal.builtin_functions = functions;	\
 	}
 
-#define INIT_CLASS_ENTRY_INIT_METHODS(class_container, functions) \
-	{															\
-		class_container.default_object_handlers = &std_object_handlers;	\
-		class_container.constructor = NULL;						\
-		class_container.destructor = NULL;						\
-		class_container.clone = NULL;							\
-		class_container.serialize = NULL;						\
-		class_container.unserialize = NULL;						\
-		class_container.create_object = NULL;					\
-		class_container.get_static_method = NULL;				\
-		class_container.__call = NULL;							\
-		class_container.__callstatic = NULL;					\
-		class_container.__tostring = NULL;						\
-		class_container.__get = NULL;							\
-		class_container.__set = NULL;							\
-		class_container.__unset = NULL;							\
-		class_container.__isset = NULL;							\
-		class_container.__debugInfo = NULL;						\
-		class_container.__serialize = NULL;						\
-		class_container.__unserialize = NULL;					\
-		class_container.parent = NULL;							\
-		class_container.num_interfaces = 0;						\
-		class_container.trait_names = NULL;						\
-		class_container.num_traits = 0;							\
-		class_container.trait_aliases = NULL;					\
-		class_container.trait_precedences = NULL;				\
-		class_container.interfaces = NULL;						\
-		class_container.get_iterator = NULL;					\
-		class_container.iterator_funcs_ptr = NULL;				\
-		class_container.arrayaccess_funcs_ptr = NULL;			\
-		class_container.info.internal.module = NULL;			\
-		class_container.info.internal.builtin_functions = functions;	\
-	}
-
-
 #define INIT_NS_CLASS_ENTRY(class_container, ns, class_name, functions) \
 	INIT_CLASS_ENTRY(class_container, ZEND_NS_NAME(ns, class_name), functions)
 
@@ -373,8 +338,6 @@ ZEND_API zend_string *zend_zval_get_legacy_type(const zval *arg);
 ZEND_API zend_result zend_parse_method_parameters(uint32_t num_args, zval *this_ptr, const char *type_spec, ...);
 ZEND_API zend_result zend_parse_method_parameters_ex(int flags, uint32_t num_args, zval *this_ptr, const char *type_spec, ...);
 
-ZEND_API zend_result zend_parse_parameter(int flags, uint32_t arg_num, zval *arg, const char *spec, ...);
-
 /* End of parameter parsing API -- andrei */
 
 ZEND_API zend_result zend_register_functions(zend_class_entry *scope, const zend_function_entry *functions, HashTable *function_table, int type);
@@ -395,6 +358,7 @@ ZEND_API zend_class_entry *zend_register_internal_class_ex(const zend_class_entr
 ZEND_API zend_class_entry *zend_register_internal_class_with_flags(const zend_class_entry *class_entry, zend_class_entry *parent_ce, uint32_t flags);
 ZEND_API zend_class_entry *zend_register_internal_interface(const zend_class_entry *orig_class_entry);
 ZEND_API void zend_class_implements(zend_class_entry *class_entry, int num_interfaces, ...);
+ZEND_API void zend_class_use_internal_traits(zend_class_entry *class_entry, int num_traits, ...);
 
 ZEND_API zend_result zend_register_class_alias_ex(const char *name, size_t name_len, zend_class_entry *ce, bool persistent);
 
@@ -414,12 +378,23 @@ ZEND_API ZEND_COLD void zend_wrong_property_read(const zval *object, zval *prope
 
 ZEND_API void zend_release_fcall_info_cache(zend_fcall_info_cache *fcc);
 ZEND_API zend_string *zend_get_callable_name_ex(const zval *callable, const zend_object *object);
-ZEND_API zend_string *zend_get_callable_name(const zval *callable);
+static zend_always_inline zend_string *zend_get_callable_name(const zval *callable)
+{
+	return zend_get_callable_name_ex(callable, NULL);
+}
+
 ZEND_API bool zend_is_callable_at_frame(
 		const zval *callable, zend_object *object, const zend_execute_data *frame,
 		uint32_t check_flags, zend_fcall_info_cache *fcc, char **error);
+ZEND_API bool zend_is_callable_in_runtime_module(
+		const zval *callable, zend_runtime_module *runtime_module, uint32_t check_flags,
+		zend_string **callable_name, zend_fcall_info_cache *fcc, char **error);
 ZEND_API bool zend_is_callable_ex(const zval *callable, zend_object *object, uint32_t check_flags, zend_string **callable_name, zend_fcall_info_cache *fcc, char **error);
-ZEND_API bool zend_is_callable(const zval *callable, uint32_t check_flags, zend_string **callable_name);
+static zend_always_inline bool zend_is_callable(const zval *callable, zend_fcall_info_cache *fcc, char **error)
+{
+	return zend_is_callable_ex(callable, NULL, 0, NULL, fcc, error);
+}
+
 ZEND_API const char *zend_get_module_version(const char *module_name);
 ZEND_API zend_result zend_get_module_started(const char *module_name);
 
@@ -445,8 +420,8 @@ ZEND_API void zend_declare_class_constant_stringl(zend_class_entry *ce, const ch
 ZEND_API void zend_declare_class_constant_string(zend_class_entry *ce, const char *name, size_t name_length, const char *value);
 
 ZEND_API zend_result zend_update_class_constant(zend_class_constant *c, const zend_string *name, zend_class_entry *scope);
-ZEND_API zend_result zend_update_class_constants(zend_class_entry *class_type);
-ZEND_API HashTable *zend_separate_class_constants_table(const zend_class_entry *class_type);
+ZEND_API zend_result zend_update_class_constants(zend_class_entry *ce);
+ZEND_API HashTable *zend_separate_class_constants_table(const zend_class_entry *ce);
 
 static zend_always_inline const HashTable *zend_class_constants_table(const zend_class_entry *ce) {
 	if ((ce->ce_flags & ZEND_ACC_HAS_AST_CONSTANTS) && ZEND_MAP_PTR(ce->mutable_data)) {
@@ -542,11 +517,71 @@ static zend_always_inline void array_init(zval *arg)
 	array_init_size(arg, 0);
 }
 
+static zend_always_inline void array_init_singleton(zval *arg)
+{
+	ZVAL_ARR(arg, zend_new_array_singleton());
+}
+
+/* Fallible array_init()/object_init(): on failure return false and leave arg as
+ * IS_NULL, so arg stays safe to destroy. */
+static zend_always_inline bool _array_finit(zval *arg, size_t size)
+{
+	zend_array *ht = zend_fnew_array(size);
+	if (UNEXPECTED(ht == NULL)) {
+		ZVAL_NULL(arg);
+		return false;
+	}
+	ZVAL_ARR(arg, ht);
+	return true;
+}
+
+static zend_always_inline bool _array_finit_ex(zval *arg, size_t size, bool packed)
+{
+	zend_array *ht = zend_fnew_array(size);
+	if (UNEXPECTED(ht == NULL)) {
+		ZVAL_NULL(arg);
+		return false;
+	}
+	if (UNEXPECTED(zend_hash_real_finit(ht, packed, /* fallible */ true) == FAILURE)) {
+		efree(ht);
+		ZVAL_NULL(arg);
+		return false;
+	}
+	ZVAL_ARR(arg, ht);
+	return true;
+}
+
+static zend_always_inline bool array_finit(zval *arg)
+{
+	return _array_finit(arg, 0);
+}
+
+static zend_always_inline bool array_finit_size(zval *arg, size_t size)
+{
+	return _array_finit(arg, size);
+}
+
+static zend_always_inline bool array_finit_size_ex(zval *arg, size_t size, bool packed)
+{
+	return _array_finit_ex(arg, size, packed);
+}
+
+static zend_always_inline bool array_finit_size_packed(zval *arg, size_t size)
+{
+	return _array_finit_ex(arg, size, /* packed */ true);
+}
+
+static zend_always_inline bool array_finit_size_mixed(zval *arg, size_t size)
+{
+	return _array_finit_ex(arg, size, /* packed */ false);
+}
+
 ZEND_API void object_init(zval *arg);
+ZEND_API bool object_finit(zval *arg);
 ZEND_API zend_result object_init_ex(zval *arg, zend_class_entry *ce);
-ZEND_API zend_result object_init_with_constructor(zval *arg, zend_class_entry *class_type, uint32_t param_count, zval *params, HashTable *named_params);
+ZEND_API zend_result object_init_with_constructor(zval *arg, zend_class_entry *ce, uint32_t param_count, zval *params, HashTable *named_params);
 ZEND_API zend_result object_and_properties_init(zval *arg, zend_class_entry *ce, HashTable *properties);
-ZEND_API void object_properties_init(zend_object *object, zend_class_entry *class_type);
+ZEND_API void object_properties_init(zend_object *object, zend_class_entry *ce);
 ZEND_API void object_properties_init_ex(zend_object *object, HashTable *properties);
 ZEND_API void object_properties_load(zend_object *object, const HashTable *properties);
 
@@ -713,6 +748,10 @@ ZEND_API zend_result _call_user_function_impl(zval *object, zval *function_name,
  * The callable_name argument may be NULL.
  */
 ZEND_API zend_result zend_fcall_info_init(const zval *callable, uint32_t check_flags, zend_fcall_info *fci, zend_fcall_info_cache *fcc, zend_string **callable_name, char **error);
+ZEND_API zend_result zend_fcall_info_init_in_runtime_module(
+		const zval *callable, zend_runtime_module *runtime_module, uint32_t check_flags,
+		zend_fcall_info *fci, zend_fcall_info_cache *fcc,
+		zend_string **callable_name, char **error);
 
 /** Clear arguments connected with zend_fcall_info *fci
  * If free_mem is not zero then the params array gets free'd as well
@@ -840,6 +879,10 @@ static zend_always_inline void zend_get_gc_buffer_add_fcc(zend_get_gc_buffer *gc
  * will be UNDEF. Otherwise, the retval will be a non-UNDEF value. */
 ZEND_API zend_result zend_call_function(zend_fcall_info *fci, zend_fcall_info_cache *fci_cache);
 
+/* Supply an explicit context to internal callbacks; user code retains declaration ownership. */
+ZEND_API zend_result zend_call_function_in_runtime_module(
+	zend_fcall_info *fci, zend_fcall_info_cache *fci_cache, zend_runtime_module *runtime_module);
+
 /* Call the FCI/FCC pair while setting the call return value to the passed zval*. */
 static zend_always_inline zend_result zend_call_function_with_return_value(
 	zend_fcall_info *fci, zend_fcall_info_cache *fci_cache, zval *retval)
@@ -851,14 +894,29 @@ static zend_always_inline zend_result zend_call_function_with_return_value(
 
 /* Call the provided zend_function with the given params.
  * If retval_ptr is NULL, the return value is discarded.
- * If object is NULL, this must be a free function or static call.
+ * If this_ptr is NULL, this must be a free function or static call.
  * called_scope must be provided for instance and static method calls. */
-ZEND_API void zend_call_known_function(
-		zend_function *fn, zend_object *object, zend_class_entry *called_scope, zval *retval_ptr,
-		uint32_t param_count, zval *params, HashTable *named_params);
+ZEND_API void zend_call_known_function_ex(
+		zend_function *fn, zend_object *this_ptr, zend_class_entry *called_scope, zval *retval_ptr,
+		uint32_t param_count, zval *params, HashTable *named_params, uint32_t consumed_args);
+/* A NULL runtime_module explicitly selects the root context. */
+ZEND_API void zend_call_known_fcc_in_runtime_module(
+		const zend_fcall_info_cache *fcc, zend_runtime_module *runtime_module,
+		zval *retval_ptr, uint32_t param_count, zval *params, HashTable *named_params);
+ZEND_API void zend_call_known_fcc_in_runtime_module_ex(
+		const zend_fcall_info_cache *fcc, zend_runtime_module *runtime_module,
+		zval *retval_ptr, uint32_t param_count, zval *params, HashTable *named_params,
+		uint32_t consumed_args);
 
-static zend_always_inline void zend_call_known_fcc(
-	const zend_fcall_info_cache *fcc, zval *retval_ptr, uint32_t param_count, zval *params, HashTable *named_params)
+static zend_always_inline void zend_call_known_function(
+		zend_function *fn, zend_object *this_ptr, zend_class_entry *called_scope, zval *retval_ptr,
+		uint32_t param_count, zval *params, HashTable *named_params) {
+	zend_call_known_function_ex(fn, this_ptr, called_scope, retval_ptr, param_count, params, named_params, 0);
+}
+
+static zend_always_inline void zend_call_known_fcc_ex(
+	const zend_fcall_info_cache *fcc, zval *retval_ptr,
+	uint32_t param_count, zval *params, HashTable *named_params, uint32_t consumed_args)
 {
 	zend_function *func = fcc->function_handler;
 	/* Need to copy trampolines as they get released after they are called */
@@ -867,38 +925,53 @@ static zend_always_inline void zend_call_known_fcc(
 		memcpy(func, fcc->function_handler, sizeof(zend_function));
 		zend_string_addref(func->op_array.function_name);
 	}
-	zend_call_known_function(func, fcc->object, fcc->called_scope, retval_ptr, param_count, params, named_params);
+	zend_call_known_function_ex(func, fcc->object, fcc->called_scope, retval_ptr, param_count, params, named_params, consumed_args);
+}
+
+static zend_always_inline void zend_call_known_fcc(
+	const zend_fcall_info_cache *fcc, zval *retval_ptr, uint32_t param_count, zval *params, HashTable *named_params)
+{
+	zend_call_known_fcc_ex(fcc, retval_ptr, param_count, params, named_params, 0);
 }
 
 /* Call the provided zend_function instance method on an object. */
 static zend_always_inline void zend_call_known_instance_method(
-		zend_function *fn, zend_object *object, zval *retval_ptr,
+		zend_function *fn, zend_object *this_ptr, zval *retval_ptr,
 		uint32_t param_count, zval *params)
 {
-	zend_call_known_function(fn, object, object->ce, retval_ptr, param_count, params, NULL);
+	zend_call_known_function(fn, this_ptr, this_ptr->ce, retval_ptr, param_count, params, NULL);
 }
 
 static zend_always_inline void zend_call_known_instance_method_with_0_params(
-		zend_function *fn, zend_object *object, zval *retval_ptr)
+		zend_function *fn, zend_object *this_ptr, zval *retval_ptr)
 {
-	zend_call_known_instance_method(fn, object, retval_ptr, 0, NULL);
+	zend_call_known_instance_method(fn, this_ptr, retval_ptr, 0, NULL);
 }
 
 static zend_always_inline void zend_call_known_instance_method_with_1_params(
-		zend_function *fn, zend_object *object, zval *retval_ptr, zval *param)
+		zend_function *fn, zend_object *this_ptr, zval *retval_ptr, zval *param)
 {
-	zend_call_known_instance_method(fn, object, retval_ptr, 1, param);
+	zend_call_known_instance_method(fn, this_ptr, retval_ptr, 1, param);
 }
 
 ZEND_API void zend_call_known_instance_method_with_2_params(
-		zend_function *fn, zend_object *object, zval *retval_ptr, zval *param1, zval *param2);
+		zend_function *fn, zend_object *this_ptr, zval *retval_ptr, zval *param1, zval *param2);
 
-/* Call method if it exists. Return FAILURE if method does not exist or call failed.
- * If FAILURE is returned, retval will be UNDEF. As such, destroying retval unconditionally
- * is legal. */
-ZEND_API zend_result zend_call_method_if_exists(
-		zend_object *object, zend_string *method_name, zval *retval,
-		uint32_t param_count, zval *params);
+/* Call method if it exists.
+ * Return FAILURE if method does not exist.
+ * If FAILURE is returned, retval will be UNDEF, and error will contain the validation failure message if provided.
+ * As such, destroying retval unconditionally is legal.
+ */
+ZEND_API zend_result zend_call_method_if_exists_ex(
+		zend_object *this_ptr, zend_string *method_name, zval *retval_ptr,
+		uint32_t param_count, zval *params, HashTable *named_params, char **error);
+
+static zend_always_inline zend_result zend_call_method_if_exists(
+		zend_object *this_ptr, zend_string *method_name,
+		zval *retval_ptr, uint32_t param_count, zval *params
+) {
+	return zend_call_method_if_exists_ex(this_ptr, method_name, retval_ptr, param_count, params, NULL, NULL);
+}
 
 ZEND_API zend_result zend_delete_global_variable(zend_string *name);
 
@@ -940,8 +1013,6 @@ static zend_always_inline const char *zend_get_object_type_uc(const zend_class_e
 
 ZEND_API bool zend_is_iterable(const zval *iterable);
 
-ZEND_API bool zend_is_countable(const zval *countable);
-
 ZEND_API void zend_convert_internal_arg_info(zend_arg_info *new_arg_info,
 		const zend_internal_arg_info *arg_info, bool is_return_info,
 		bool permanent);
@@ -971,10 +1042,25 @@ static zend_always_inline bool zend_char_has_nul_byte(const char *s, size_t know
 		ZVAL_NEW_STR(z, zend_string_init(s, l, 0));		\
 	} while (0)
 
+/* Fallible variant of ZVAL_STRINGL() to be used when 's' is not managed by zend_alloc */
+static zend_always_inline bool ZVAL_FSTRINGL(zval *z, const char *s, size_t l) {
+	zend_string *str = zend_string_finit(s, l, /* persistent */ false, /* fallible */ true);
+	if (UNEXPECTED(!str)) {
+		ZVAL_INTERNED_STR(z, ZSTR_EMPTY_ALLOC());
+		return false;
+	}
+	ZVAL_NEW_STR(z, str);
+	return true;
+}
+
 #define ZVAL_STRING(z, s) do {					\
 		const char *_s = (s);					\
 		ZVAL_STRINGL(z, _s, strlen(_s));		\
 	} while (0)
+
+static zend_always_inline bool ZVAL_FSTRING(zval *z, const char *s) {
+	return ZVAL_FSTRINGL(z, s, strlen(s));
+}
 
 #define ZVAL_EMPTY_STRING(z) do {				\
 		ZVAL_INTERNED_STR(z, ZSTR_EMPTY_ALLOC());		\
@@ -1036,6 +1122,8 @@ static zend_always_inline bool zend_char_has_nul_byte(const char *s, size_t know
 #define RETVAL_STRINGL(s, l)			ZVAL_STRINGL(return_value, s, l)
 #define RETVAL_STRING_FAST(s)			ZVAL_STRING_FAST(return_value, s)
 #define RETVAL_STRINGL_FAST(s, l)		ZVAL_STRINGL_FAST(return_value, s, l)
+#define RETVAL_FSTRING(s)				ZVAL_FSTRING(return_value, s)
+#define RETVAL_FSTRINGL(s, l)			ZVAL_FSTRINGL(return_value, s, l)
 #define RETVAL_EMPTY_STRING()			ZVAL_EMPTY_STRING(return_value)
 #define RETVAL_CHAR(c)		            ZVAL_CHAR(return_value, c)
 #define RETVAL_RES(r)					ZVAL_RES(return_value, r)
@@ -1062,6 +1150,8 @@ static zend_always_inline bool zend_char_has_nul_byte(const char *s, size_t know
 #define RETURN_STRINGL(s, l) 			do { RETVAL_STRINGL(s, l); return; } while (0)
 #define RETURN_STRING_FAST(s) 			do { RETVAL_STRING_FAST(s); return; } while (0)
 #define RETURN_STRINGL_FAST(s, l)		do { RETVAL_STRINGL_FAST(s, l); return; } while (0)
+#define RETURN_FSTRING(s) 			    do { RETVAL_FSTRING(s); return; } while (0)
+#define RETURN_FSTRINGL(s, l)			do { RETVAL_FSTRINGL(s, l); return; } while (0)
 #define RETURN_EMPTY_STRING() 			do { RETVAL_EMPTY_STRING(); return; } while (0)
 #define RETURN_CHAR(c)		            do { RETVAL_CHAR(c); return; } while (0)
 #define RETURN_RES(r)					do { RETVAL_RES(r); return; } while (0)
@@ -1076,6 +1166,7 @@ static zend_always_inline bool zend_char_has_nul_byte(const char *s, size_t know
 #define RETURN_FALSE					do { RETVAL_FALSE; return; } while (0)
 #define RETURN_TRUE						do { RETVAL_TRUE; return; } while (0)
 #define RETURN_THROWS()					do { ZEND_ASSERT(EG(exception)); (void) return_value; return; } while (0)
+#define RETURN_OOM()                    do { ZEND_ASSERT(ZEND_HAS_OOM()); (void) return_value; return; } while (0)
 
 #define HASH_OF(p) (Z_TYPE_P(p)==IS_ARRAY ? Z_ARRVAL_P(p) : ((Z_TYPE_P(p)==IS_OBJECT ? Z_OBJ_HT_P(p)->get_properties(Z_OBJ_P(p)) : NULL)))
 
@@ -1551,6 +1642,8 @@ static zend_always_inline zval *zend_try_array_init(zval *zv)
 	_(Z_EXPECTED_ARRAY_OR_STRING_OR_NULL, "of type array|string|null") \
 	_(Z_EXPECTED_STRING_OR_LONG,	"of type string|int") \
 	_(Z_EXPECTED_STRING_OR_LONG_OR_NULL, "of type string|int|null") \
+	_(Z_EXPECTED_CLASS_NAME,	"a valid class name") \
+	_(Z_EXPECTED_CLASS_NAME_OR_NULL, "a valid class name or null") \
 	_(Z_EXPECTED_OBJECT_OR_CLASS_NAME,	"an object or a valid class name") \
 	_(Z_EXPECTED_OBJECT_OR_CLASS_NAME_OR_NULL, "an object, a valid class name, or null") \
 	_(Z_EXPECTED_OBJECT_OR_STRING,	"of type object|string") \
@@ -1566,9 +1659,26 @@ typedef enum _zend_expected_type {
 	Z_EXPECTED_LAST
 } zend_expected_type;
 
+C23_ENUM(zpp_error, uint8_t) {
+	ZPP_ERROR_OK,
+	ZPP_ERROR_FAILURE,
+	ZPP_ERROR_WRONG_CALLBACK,
+	ZPP_ERROR_WRONG_CALLBACK_OR_NULL,
+	ZPP_ERROR_WRONG_CLASS_NAME,
+	ZPP_ERROR_WRONG_CLASS_NAME_OR_NULL,
+	ZPP_ERROR_WRONG_CLASS,
+	ZPP_ERROR_WRONG_CLASS_OR_NULL,
+	ZPP_ERROR_WRONG_CLASS_OR_STRING,
+	ZPP_ERROR_WRONG_CLASS_OR_STRING_OR_NULL,
+	ZPP_ERROR_WRONG_CLASS_OR_LONG,
+	ZPP_ERROR_WRONG_CLASS_OR_LONG_OR_NULL,
+	ZPP_ERROR_WRONG_ARG,
+	ZPP_ERROR_UNEXPECTED_EXTRA_NAMED,
+};
+
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameters_none_error(void);
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameters_count_error(uint32_t min_num_args, uint32_t max_num_args);
-ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameter_error(int error_code, uint32_t num, char *name, zend_expected_type expected_type, const zval *arg);
+ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameter_error(zpp_error error_code, uint32_t num, char *name, zend_expected_type expected_type, const zval *arg);
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameter_type_error(uint32_t num, zend_expected_type expected_type, const zval *arg);
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameter_class_error(uint32_t num, const char *name, const zval *arg);
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameter_class_or_null_error(uint32_t num, const char *name, const zval *arg);
@@ -1579,27 +1689,16 @@ ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_parameter_class_or_string_or_nu
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_callback_error(uint32_t num, char *error);
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_wrong_callback_or_null_error(uint32_t num, char *error);
 ZEND_API ZEND_COLD void ZEND_FASTCALL zend_unexpected_extra_named_error(void);
-ZEND_API ZEND_COLD void ZEND_FASTCALL zend_argument_error_variadic(zend_class_entry *error_ce, uint32_t arg_num, const char *format, va_list va);
+ZEND_API ZEND_COLD void ZEND_FASTCALL zend_argument_error_variadic(zend_class_entry *error_ce, const zend_function *function, uint32_t arg_num, const char *format, va_list va);
 ZEND_API ZEND_COLD void zend_argument_error(zend_class_entry *error_ce, uint32_t arg_num, const char *format, ...);
+ZEND_API ZEND_COLD void zend_argument_error_ex(zend_class_entry *error_ce, const zend_function *function, uint32_t arg_num, const char *format, ...);
 ZEND_API ZEND_COLD void zend_argument_type_error(uint32_t arg_num, const char *format, ...);
+ZEND_API ZEND_COLD void zend_argument_type_error_ex(const zend_function *function, uint32_t arg_num, const char *format, ...);
 ZEND_API ZEND_COLD void zend_argument_value_error(uint32_t arg_num, const char *format, ...);
+ZEND_API ZEND_COLD void zend_argument_value_error_ex(const zend_function *function, uint32_t arg_num, const char *format, ...);
 ZEND_API ZEND_COLD void zend_argument_must_not_be_empty_error(uint32_t arg_num);
 ZEND_API ZEND_COLD void zend_class_redeclaration_error(int type, const zend_class_entry *old_ce);
 ZEND_API ZEND_COLD void zend_class_redeclaration_error_ex(int type, zend_string *new_name, const zend_class_entry *old_ce);
-
-#define ZPP_ERROR_OK                            0
-#define ZPP_ERROR_FAILURE                       1
-#define ZPP_ERROR_WRONG_CALLBACK                2
-#define ZPP_ERROR_WRONG_CLASS                   3
-#define ZPP_ERROR_WRONG_CLASS_OR_NULL           4
-#define ZPP_ERROR_WRONG_CLASS_OR_STRING         5
-#define ZPP_ERROR_WRONG_CLASS_OR_STRING_OR_NULL 6
-#define ZPP_ERROR_WRONG_CLASS_OR_LONG           7
-#define ZPP_ERROR_WRONG_CLASS_OR_LONG_OR_NULL   8
-#define ZPP_ERROR_WRONG_ARG                     9
-#define ZPP_ERROR_WRONG_COUNT                   10
-#define ZPP_ERROR_UNEXPECTED_EXTRA_NAMED        11
-#define ZPP_ERROR_WRONG_CALLBACK_OR_NULL        12
 
 #define ZEND_PARSE_PARAMETERS_START_EX(flags, min_num_args, max_num_args) do { \
 		const int _flags = (flags); \
@@ -1612,7 +1711,7 @@ ZEND_API ZEND_COLD void zend_class_redeclaration_error_ex(int type, zend_string 
 		char *_error = NULL; \
 		bool _dummy = 0; \
 		bool _optional = 0; \
-		int _error_code = ZPP_ERROR_OK; \
+		zpp_error _error_code = ZPP_ERROR_OK; \
 		((void)_i); \
 		((void)_real_arg); \
 		((void)_arg); \
@@ -1673,10 +1772,6 @@ ZEND_API ZEND_COLD void zend_class_redeclaration_error_ex(int type, zend_string 
 	if (separate) { \
 		SEPARATE_ZVAL_NOREF(_arg); \
 	}
-
-/* get the zval* for a previously parsed argument */
-#define Z_PARAM_GET_PREV_ZVAL(dest) \
-	zend_parse_arg_zval_deref(_arg, &dest, 0);
 
 /* old "|" */
 #define Z_PARAM_OPTIONAL \
@@ -1747,8 +1842,11 @@ ZEND_API ZEND_COLD void zend_class_redeclaration_error_ex(int type, zend_string 
 /* old "C" */
 #define Z_PARAM_CLASS_EX(dest, check_null, deref) \
 		Z_PARAM_PROLOGUE(deref, 0); \
-		if (UNEXPECTED(!zend_parse_arg_class(_arg, &dest, _i, check_null))) { \
-			_error_code = ZPP_ERROR_FAILURE; \
+		const zend_class_entry *_base_ce = dest; \
+		if (UNEXPECTED(!zend_parse_arg_class(_arg, &dest, _base_ce, _i, check_null))) { \
+			_error = _base_ce ? ZSTR_VAL((_base_ce)->name) : NULL; \
+			_expected_type = check_null ? Z_EXPECTED_CLASS_NAME_OR_NULL : Z_EXPECTED_CLASS_NAME; \
+			_error_code = check_null ? ZPP_ERROR_WRONG_CLASS_NAME_OR_NULL : ZPP_ERROR_WRONG_CLASS_NAME; \
 			break; \
 		}
 
@@ -1847,10 +1945,6 @@ ZEND_API ZEND_COLD void zend_class_redeclaration_error_ex(int type, zend_string 
 
 #define Z_PARAM_FUNC_NO_TRAMPOLINE_FREE_OR_NULL(dest_fci, dest_fcc) \
 	Z_PARAM_FUNC_EX2(dest_fci, dest_fcc, 1, 0, false)
-
-#define Z_PARAM_FUNC_OR_NULL_WITH_ZVAL(dest_fci, dest_fcc, dest_zp) \
-	Z_PARAM_FUNC_EX2(dest_fci, dest_fcc, 1, 0, true) \
-	Z_PARAM_GET_PREV_ZVAL(dest_zp)
 
 /* old "h" */
 #define Z_PARAM_ARRAY_HT_EX2(dest, check_null, deref, separate) \
@@ -2031,9 +2125,9 @@ ZEND_API ZEND_COLD void zend_class_redeclaration_error_ex(int type, zend_string 
 
 #define Z_PARAM_ENUM(dest, _ce) \
 	{ \
-		zend_object *_tmp = NULL; \
-		Z_PARAM_OBJ_OF_CLASS(_tmp, _ce); \
-		dest = zend_enum_fetch_case_id(_tmp); \
+		zend_object *__##dest = NULL; \
+		Z_PARAM_OBJ_OF_CLASS(__##dest, _ce); \
+		dest = zend_enum_fetch_case_id(__##dest); \
 	}
 
 /* old "p" */
@@ -2200,7 +2294,7 @@ typedef enum zpp_parse_bool_status {
 	ZPP_PARSE_BOOL_STATUS_ERROR = 2,
 } zpp_parse_bool_status;
 
-ZEND_API bool ZEND_FASTCALL zend_parse_arg_class(zval *arg, zend_class_entry **pce, uint32_t num, bool check_null);
+ZEND_API bool ZEND_FASTCALL zend_parse_arg_class(zval *arg, zend_class_entry **pce, const zend_class_entry *ce_base, uint32_t num, bool check_null);
 ZEND_API zpp_parse_bool_status ZEND_FASTCALL zend_parse_arg_bool_slow(const zval *arg, uint32_t arg_num);
 ZEND_API zpp_parse_bool_status ZEND_FASTCALL zend_parse_arg_bool_weak(const zval *arg, uint32_t arg_num);
 ZEND_API bool ZEND_FASTCALL zend_parse_arg_long_slow(const zval *arg, zend_long *dest, uint32_t arg_num);

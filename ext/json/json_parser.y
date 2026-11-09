@@ -39,7 +39,6 @@ int json_yydebug = 1;
 
 }
 
-%locations
 %define api.prefix {php_json_yy}
 %define api.pure full
 %param  { php_json_parser *parser  }
@@ -64,8 +63,8 @@ int json_yydebug = 1;
 %destructor { zval_ptr_dtor_nogc(&$$); } <value>
 
 %code {
-static int php_json_yylex(union YYSTYPE *value, YYLTYPE *location, php_json_parser *parser);
-static void php_json_yyerror(YYLTYPE *location, php_json_parser *parser, char const *msg);
+static int php_json_yylex(union YYSTYPE *value, php_json_parser *parser);
+static void php_json_yyerror(php_json_parser *parser, char const *msg);
 static int php_json_parser_array_create(php_json_parser *parser, zval *array);
 static int php_json_parser_object_create(php_json_parser *parser, zval *array);
 
@@ -116,7 +115,9 @@ members:
 				if ((parser->scanner.options & PHP_JSON_OBJECT_AS_ARRAY) && parser->methods.object_create == php_json_parser_object_create) {
 					ZVAL_EMPTY_ARRAY(&$$);
 				} else {
-					parser->methods.object_create(parser, &$$);
+					if (UNEXPECTED(parser->methods.object_create(parser, &$$) == FAILURE)) {
+						YYERROR;
+					}
 				}
 			}
 	|	member
@@ -125,7 +126,9 @@ members:
 member:
 		key ':' value
 			{
-				parser->methods.object_create(parser, &$$);
+				if (UNEXPECTED(parser->methods.object_create(parser, &$$) == FAILURE)) {
+					YYERROR;
+				}
 				if (parser->methods.object_update(parser, &$$, Z_STR($1), &$3) == FAILURE) {
 					YYERROR;
 				}
@@ -172,7 +175,9 @@ elements:
 				if (parser->methods.array_create == php_json_parser_array_create) {
 					ZVAL_EMPTY_ARRAY(&$$);
 				} else {
-					parser->methods.array_create(parser, &$$);
+					if (UNEXPECTED(parser->methods.array_create(parser, &$$) == FAILURE)) {
+						YYERROR;
+					}
 				}
 			}
 	|	element
@@ -181,12 +186,18 @@ elements:
 element:
 		value
 			{
-				parser->methods.array_create(parser, &$$);
-				parser->methods.array_append(parser, &$$, &$1);
+				if (UNEXPECTED(parser->methods.array_create(parser, &$$) == FAILURE)) {
+					YYERROR;
+				}
+				if (UNEXPECTED(parser->methods.array_append(parser, &$$, &$1) == FAILURE)) {
+					YYERROR;
+				}
 			}
 	|	element ',' value
 			{
-				parser->methods.array_append(parser, &$1, &$3);
+				if (UNEXPECTED(parser->methods.array_append(parser, &$1, &$3) == FAILURE)) {
+					YYERROR;
+				}
 				ZVAL_COPY_VALUE(&$$, &$1);
 			}
 ;
@@ -212,22 +223,34 @@ value:
 
 static int php_json_parser_array_create(php_json_parser *parser, zval *array)
 {
-	array_init(array);
+	if (UNEXPECTED(!array_finit(array))) {
+		ZEND_ASSERT(ZEND_HAS_OOM());
+		return FAILURE;
+	}
 	return SUCCESS;
 }
 
 static int php_json_parser_array_append(php_json_parser *parser, zval *array, zval *zvalue)
 {
-	zend_hash_next_index_insert(Z_ARRVAL_P(array), zvalue);
+	if (UNEXPECTED(zend_hash_next_index_finsert(Z_ARRVAL_P(array), zvalue) == HASH_NOMEM)) {
+		ZEND_ASSERT(ZEND_HAS_OOM());
+		return FAILURE;
+	}
 	return SUCCESS;
 }
 
 static int php_json_parser_object_create(php_json_parser *parser, zval *object)
 {
+	bool created;
+
 	if (parser->scanner.options & PHP_JSON_OBJECT_AS_ARRAY) {
-		array_init(object);
+		created = array_finit(object);
 	} else {
-		object_init(object);
+		created = object_finit(object);
+	}
+	if (UNEXPECTED(!created)) {
+		ZEND_ASSERT(ZEND_HAS_OOM());
+		return FAILURE;
 	}
 	return SUCCESS;
 }
@@ -236,7 +259,9 @@ static int php_json_parser_object_update(php_json_parser *parser, zval *object, 
 {
 	/* if JSON_OBJECT_AS_ARRAY is set */
 	if (Z_TYPE_P(object) == IS_ARRAY) {
-		zend_symtable_update(Z_ARRVAL_P(object), key, zvalue);
+		if (UNEXPECTED(zend_symtable_fupdate(Z_ARRVAL_P(object), key, zvalue) == HASH_NOMEM)) {
+			return FAILURE;
+		}
 	} else {
 		if (ZSTR_LEN(key) > 0 && ZSTR_VAL(key)[0] == '\0') {
 			parser->scanner.errcode = PHP_JSON_ERROR_INVALID_PROPERTY_NAME;
@@ -247,6 +272,9 @@ static int php_json_parser_object_update(php_json_parser *parser, zval *object, 
 		}
 		zend_std_write_property(Z_OBJ_P(object), key, zvalue, NULL);
 		Z_TRY_DELREF_P(zvalue);
+		if (ZEND_HAS_OOM()) {
+			return FAILURE;
+		}
 	}
 	zend_string_release_ex(key, 0);
 
@@ -275,7 +303,7 @@ static int php_json_parser_object_update_validate(php_json_parser *parser, zval 
 	return SUCCESS;
 }
 
-static int php_json_yylex(union YYSTYPE *value, YYLTYPE *location, php_json_parser *parser)
+static int php_json_yylex(union YYSTYPE *value, php_json_parser *parser)
 {
 	int token = php_json_scan(&parser->scanner);
 
@@ -291,15 +319,10 @@ static int php_json_yylex(union YYSTYPE *value, YYLTYPE *location, php_json_pars
 		value->value = parser->scanner.value;
 	}
 
-	location->first_column = PHP_JSON_SCANNER_LOCATION(parser->scanner, first_column);
-	location->first_line = PHP_JSON_SCANNER_LOCATION(parser->scanner, first_line);
-	location->last_column = PHP_JSON_SCANNER_LOCATION(parser->scanner, last_column);
-	location->last_line = PHP_JSON_SCANNER_LOCATION(parser->scanner, last_line);
-
 	return token;
 }
 
-static void php_json_yyerror(YYLTYPE *location, php_json_parser *parser, char const *msg)
+static void php_json_yyerror(php_json_parser *parser, char const *msg)
 {
 	if (!parser->scanner.errcode) {
 		parser->scanner.errcode = PHP_JSON_ERROR_SYNTAX;
@@ -311,11 +334,28 @@ PHP_JSON_API php_json_error_code php_json_parser_error_code(const php_json_parse
 	return parser->scanner.errcode;
 }
 
+static uint64_t php_json_compute_error_column(const php_json_scanner *s)
+{
+	const php_json_ctype *p = s->line_start;
+	const php_json_ctype *end = s->token;
+	/* Count characters from the start of the line to the failing token,
+	 * folding UTF-8 continuation bytes into their leading byte. */
+	uint64_t column = 1;
+
+	while (p < end) {
+		if ((*p & 0b11000000) != 0b10000000) {
+			column++;
+		}
+		p++;
+	}
+	return column;
+}
+
 PHP_JSON_API void php_json_parser_error_details(const php_json_parser *parser, php_json_error_details *out)
 {
 	out->code = parser->scanner.errcode;
-	out->line = parser->scanner.errloc.first_line;
-	out->column = parser->scanner.errloc.first_column;
+	out->line = parser->scanner.line;
+	out->column = php_json_compute_error_column(&parser->scanner);
 }
 
 static const php_json_parser_methods default_parser_methods =

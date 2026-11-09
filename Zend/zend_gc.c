@@ -306,12 +306,12 @@ typedef struct _zend_gc_globals {
 
 #ifdef ZTS
 static int gc_globals_id;
-static size_t gc_globals_offset;
-#define GC_G(v) ZEND_TSRMG_FAST(gc_globals_offset, zend_gc_globals *, v)
+static TSRM_TLS TSRM_TLS_MODEL_ATTR zend_gc_globals gc_globals;
+static void *gc_globals_tls_addr(void) { return &gc_globals; }
 #else
-#define GC_G(v) (gc_globals.v)
 static zend_gc_globals gc_globals;
 #endif
+#define GC_G(v) (gc_globals.v)
 
 #if GC_BENCH
 # define GC_BENCH_INC(counter) GC_G(counter)++
@@ -549,7 +549,7 @@ static void gc_globals_ctor_ex(zend_gc_globals *gc_globals)
 void gc_globals_ctor(void)
 {
 #ifdef ZTS
-	ts_allocate_fast_id(&gc_globals_id, &gc_globals_offset, sizeof(zend_gc_globals), (ts_allocate_ctor) gc_globals_ctor_ex, (ts_allocate_dtor) root_buffer_dtor);
+	ts_allocate_tls_id(&gc_globals_id, gc_globals_tls_addr, sizeof(zend_gc_globals), (ts_allocate_ctor) gc_globals_ctor_ex, (ts_allocate_dtor) root_buffer_dtor);
 #else
 	gc_globals_ctor_ex(&gc_globals);
 #endif
@@ -1574,6 +1574,9 @@ tail_call:
 				GC_ADDREF(ht);
 				if (GC_REF_CHECK_COLOR(ht, GC_WHITE)) {
 					GC_REF_SET_BLACK(ht);
+					if (!GC_INFO(ht)) {
+						gc_add_garbage((zend_refcounted *)ht);
+					}
 					for (; n != 0; n--) {
 						if (Z_COLLECTABLE_P(zv)) {
 							ref = Z_COUNTED_P(zv);
@@ -1857,14 +1860,14 @@ static void zend_gc_remove_root_tmpvars(void);
 
 static zend_internal_function gc_destructor_fiber;
 
-static ZEND_COLD ZEND_NORETURN void gc_create_destructor_fiber_error(void)
+ZEND_NORETURN static ZEND_COLD void gc_create_destructor_fiber_error(void)
 {
-	zend_error_noreturn(E_ERROR, "Unable to create destructor fiber");
+	zend_error_noreturn(E_CORE_ERROR, "Unable to create destructor fiber");
 }
 
-static ZEND_COLD ZEND_NORETURN void gc_start_destructor_fiber_error(void)
+ZEND_NORETURN static ZEND_COLD void gc_start_destructor_fiber_error(void)
 {
-	zend_error_noreturn(E_ERROR, "Unable to start destructor fiber");
+	zend_error_noreturn(E_CORE_ERROR, "Unable to start destructor fiber");
 }
 
 /* Call destructors for garbage in the buffer. */
@@ -1953,7 +1956,9 @@ static zend_never_inline void gc_call_destructors_in_fiber(void)
 	GC_G(dtor_end) = GC_G(first_unused);
 
 	zend_object *exception = NULL;
+	const zend_op *opline_before_exception = EG(opline_before_exception);
 	remember_prev_exception(&exception);
+	zend_object *old_exception = exception;
 
 	if (UNEXPECTED(!fiber)) {
 		fiber = gc_create_destructor_fiber();
@@ -1988,6 +1993,13 @@ static zend_never_inline void gc_call_destructors_in_fiber(void)
 	}
 
 	EG(exception) = exception;
+	EG(opline_before_exception) = opline_before_exception;
+
+	/* Destructors ran in another fiber, out of reach of zend_call_function()'s rethrow */
+	if (exception && !old_exception && EG(current_execute_data) && EG(current_execute_data)->func
+			&& ZEND_USER_CODE(EG(current_execute_data)->func->common.type)) {
+		zend_rethrow_exception(EG(current_execute_data));
+	}
 }
 
 /* Perform a garbage collection run. The default implementation of gc_collect_cycles. */
@@ -2307,13 +2319,6 @@ void gc_bench_print(void)
 	fprintf(stderr, "        Root    Buffered     buffer     grey\n");
 	fprintf(stderr, "      --------  --------  -----------  ------\n");
 	fprintf(stderr, "ZVAL  %8d  %8d  %9d  %8d\n", GC_G(zval_possible_root), GC_G(zval_buffered), GC_G(zval_remove_from_buffer), GC_G(zval_marked_grey));
-}
-#endif
-
-#ifdef ZTS
-size_t zend_gc_globals_size(void)
-{
-	return sizeof(zend_gc_globals);
 }
 #endif
 

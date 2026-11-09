@@ -614,13 +614,17 @@ static sapi_module_struct lsapi_sapi_module =
     sapi_lsapi_register_variables,  /* register server variables */
     sapi_lsapi_log_message,         /* Log message */
     NULL,                           /* Get request time */
-    NULL,                           /* Child terminate */
 
     STANDARD_SAPI_MODULE_PROPERTIES
 
 };
 /* }}} */
 
+/* SG(request_info).path_translated comes from LSAPI_GetScriptFileName() without
+ * any additional validation; this is intentional, and is the mechanism by which
+ * LiteSpeed communicates the file to execute. The LiteSpeed listener should
+ * only be reachable from trusted callers. See README.md in this directory for
+ * more details. */
 static void init_request_info( void )
 {
     char * pContentType = LSAPI_GetHeader( H_CONTENT_TYPE );
@@ -774,6 +778,11 @@ static int lsapi_module_main(int show_source)
 }
 
 
+/* The use of `type = ZEND_INI_SYSTEM` when the key starts with `\x01\x04` is
+ * intentional - this is the mechanism by which LiteSpeed communicates the
+ * system-level INI options that should be set. This is only called from
+ * override_ini() with LSAPI_ForeachSpecialEnv(). See README.md in this
+ * directory for more details. */
 static int alter_ini( const char * pKey, int keyLen, const char * pValue, int valLen,
                 void * arg )
 {
@@ -1443,7 +1452,7 @@ void setArgv0( int argc, char * argv[] )
 #include <fcntl.h>
 int main( int argc, char * argv[] )
 {
-    int ret;
+    int ret = 0;
     int bindFd;
 
     char * php_ini_path = NULL;
@@ -1679,6 +1688,10 @@ PHP_FUNCTION(litespeed_response_headers)
 
     if (!zend_llist_count(&SG(sapi_headers).headers)) {
 	    RETURN_FALSE;
+    }
+
+    if (!&SG(sapi_headers).headers) {
+        RETURN_FALSE;
     }
     array_init(return_value);
 

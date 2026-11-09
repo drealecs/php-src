@@ -696,12 +696,12 @@ function sodium_crypto_pwhash_scryptsalsa208sha256_str(#[\SensitiveParameter] st
 function sodium_crypto_pwhash_scryptsalsa208sha256_str_verify(string $hash, #[\SensitiveParameter] string $password): bool {}
 #endif
 
-function sodium_crypto_scalarmult(string $n, string $p): string {}
+function sodium_crypto_scalarmult(#[\SensitiveParameter] string $n, string $p): string {}
 
 #ifdef crypto_core_ristretto255_HASHBYTES
-function sodium_crypto_scalarmult_ristretto255(string $n, string $p): string {}
+function sodium_crypto_scalarmult_ristretto255(#[\SensitiveParameter] string $n, string $p): string {}
 
-function sodium_crypto_scalarmult_ristretto255_base(string $n): string {}
+function sodium_crypto_scalarmult_ristretto255_base(#[\SensitiveParameter] string $n): string {}
 #endif
 
 function sodium_crypto_secretbox(#[\SensitiveParameter] string $message, string $nonce, #[\SensitiveParameter] string $key): string {}
@@ -936,35 +936,157 @@ const SODIUM_CRYPTO_XOF_TURBOSHAKE256_STATEBYTES = UNKNOWN;
 
 function sodium_crypto_xof_shake128(int $length, string $message): string {}
 
-function sodium_crypto_xof_shake128_init(?int $domain = null): string {}
+function sodium_crypto_xof_shake128_init(?int $domain = null): SodiumCryptoXofShake128State {}
 
-function sodium_crypto_xof_shake128_update(string &$state, string $message): true {}
+function sodium_crypto_xof_shake128_update(SodiumCryptoXofShake128State $state, string $message): void {}
 
-function sodium_crypto_xof_shake128_squeeze(string &$state, int $length): string {}
+function sodium_crypto_xof_shake128_squeeze(SodiumCryptoXofShake128State $state, int $length): string {}
+
+/**
+ * @strict-properties
+ * @not-serializable
+ */
+final class SodiumCryptoXofShake128State {
+
+}
 
 function sodium_crypto_xof_shake256(int $length, string $message): string {}
 
-function sodium_crypto_xof_shake256_init(?int $domain = null): string {}
+function sodium_crypto_xof_shake256_init(?int $domain = null): SodiumCryptoXofShake256State {}
 
-function sodium_crypto_xof_shake256_update(string &$state, string $message): true {}
+function sodium_crypto_xof_shake256_update(SodiumCryptoXofShake256State $state, string $message): void {}
 
-function sodium_crypto_xof_shake256_squeeze(string &$state, int $length): string {}
+function sodium_crypto_xof_shake256_squeeze(SodiumCryptoXofShake256State $state, int $length): string {}
+
+/**
+ * @strict-properties
+ * @not-serializable
+ */
+final class SodiumCryptoXofShake256State {
+
+}
 
 function sodium_crypto_xof_turboshake128(int $length, string $message): string {}
 
-function sodium_crypto_xof_turboshake128_init(?int $domain = null): string {}
+function sodium_crypto_xof_turboshake128_init(?int $domain = null): SodiumCryptoXofTurboshake128State {}
 
-function sodium_crypto_xof_turboshake128_update(string &$state, string $message): true {}
+function sodium_crypto_xof_turboshake128_update(SodiumCryptoXofTurboshake128State $state, string $message): void {}
 
-function sodium_crypto_xof_turboshake128_squeeze(string &$state, int $length): string {}
+function sodium_crypto_xof_turboshake128_squeeze(SodiumCryptoXofTurboshake128State $state, int $length): string {}
+
+/**
+ * @strict-properties
+ * @not-serializable
+ */
+final class SodiumCryptoXofTurboshake128State {
+
+}
 
 function sodium_crypto_xof_turboshake256(int $length, string $message): string {}
 
-function sodium_crypto_xof_turboshake256_init(?int $domain = null): string {}
+function sodium_crypto_xof_turboshake256_init(?int $domain = null): SodiumCryptoXofTurboshake256State {}
 
-function sodium_crypto_xof_turboshake256_update(string &$state, string $message): true {}
+function sodium_crypto_xof_turboshake256_update(SodiumCryptoXofTurboshake256State $state, string $message): void {}
 
-function sodium_crypto_xof_turboshake256_squeeze(string &$state, int $length): string {}
+function sodium_crypto_xof_turboshake256_squeeze(SodiumCryptoXofTurboshake256State $state, int $length): string {}
+
+/**
+ * @strict-properties
+ * @not-serializable
+ */
+final class SodiumCryptoXofTurboshake256State {
+
+}
+#endif
+
+#ifdef crypto_kem_PUBLICKEYBYTES
+/**
+ * @var int
+ * @cvalue crypto_kem_PUBLICKEYBYTES
+ */
+const SODIUM_CRYPTO_KEM_PUBLICKEYBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_SECRETKEYBYTES
+ */
+const SODIUM_CRYPTO_KEM_SECRETKEYBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_CIPHERTEXTBYTES
+ */
+const SODIUM_CRYPTO_KEM_CIPHERTEXTBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_SHAREDSECRETBYTES
+ */
+const SODIUM_CRYPTO_KEM_SHAREDSECRETBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_SEEDBYTES
+ */
+const SODIUM_CRYPTO_KEM_SEEDBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue SODIUM_CRYPTO_KEM_KEYPAIRBYTES()
+ */
+const SODIUM_CRYPTO_KEM_KEYPAIRBYTES = UNKNOWN;
+
+function sodium_crypto_kem_keypair(): string {}
+
+function sodium_crypto_kem_seed_keypair(#[\SensitiveParameter] string $seed): string {}
+
+function sodium_crypto_kem_secretkey(#[\SensitiveParameter] string $key_pair): string {}
+
+function sodium_crypto_kem_publickey(#[\SensitiveParameter] string $key_pair): string {}
+
+function sodium_crypto_kem_enc(string $public_key): array {}
+
+function sodium_crypto_kem_dec(string $ciphertext, #[\SensitiveParameter] string $secret_key): string {}
+#endif
+
+#ifdef crypto_kem_mlkem768_PUBLICKEYBYTES
+/**
+ * @var int
+ * @cvalue crypto_kem_mlkem768_PUBLICKEYBYTES
+ */
+const SODIUM_CRYPTO_KEM_MLKEM768_PUBLICKEYBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_mlkem768_SECRETKEYBYTES
+ */
+const SODIUM_CRYPTO_KEM_MLKEM768_SECRETKEYBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_mlkem768_CIPHERTEXTBYTES
+ */
+const SODIUM_CRYPTO_KEM_MLKEM768_CIPHERTEXTBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_mlkem768_SHAREDSECRETBYTES
+ */
+const SODIUM_CRYPTO_KEM_MLKEM768_SHAREDSECRETBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue crypto_kem_mlkem768_SEEDBYTES
+ */
+const SODIUM_CRYPTO_KEM_MLKEM768_SEEDBYTES = UNKNOWN;
+/**
+ * @var int
+ * @cvalue SODIUM_CRYPTO_KEM_MLKEM768_KEYPAIRBYTES()
+ */
+const SODIUM_CRYPTO_KEM_MLKEM768_KEYPAIRBYTES = UNKNOWN;
+
+function sodium_crypto_kem_mlkem768_keypair(): string {}
+
+function sodium_crypto_kem_mlkem768_seed_keypair(#[\SensitiveParameter] string $seed): string {}
+
+function sodium_crypto_kem_mlkem768_secretkey(#[\SensitiveParameter] string $key_pair): string {}
+
+function sodium_crypto_kem_mlkem768_publickey(#[\SensitiveParameter] string $key_pair): string {}
+
+function sodium_crypto_kem_mlkem768_enc(string $public_key): array {}
+
+function sodium_crypto_kem_mlkem768_dec(string $ciphertext, #[\SensitiveParameter] string $secret_key): string {}
 #endif
 
 class SodiumException extends Exception {}

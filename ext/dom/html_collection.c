@@ -46,7 +46,6 @@ static dom_named_item dom_html_collection_named_item(zend_string *key, zend_obje
 	xmlNodePtr basep = dom_object_get_node(objmap->baseobj);
 	if (basep != NULL && basep->children != NULL) {
 		php_dom_obj_map_collection_iter iter = {0};
-		iter.candidate = basep->children;
 		iter.basep = basep;
 
 		while (true) {
@@ -101,7 +100,7 @@ PHP_METHOD(Dom_HTMLCollection, namedItem)
 zval *dom_html_collection_read_dimension(zend_object *object, zval *offset, int type, zval *rv)
 {
 	if (UNEXPECTED(!offset)) {
-		zend_throw_error(NULL, "Cannot append to %s", ZSTR_VAL(object->ce->name));
+		zend_throw_error(NULL, "Cannot append to %pS", object->ce->name);
 		return NULL;
 	}
 

@@ -145,6 +145,9 @@ static int php_zlib_output_encoding(void)
 	zval *enc;
 
 	if (!ZLIBG(compression_coding)) {
+		if (!EG(active)) {
+			return 0;
+		}
 		if ((Z_TYPE(PG(http_globals)[TRACK_VARS_SERVER]) == IS_ARRAY || zend_is_auto_global(ZSTR_KNOWN(ZEND_STR_AUTOGLOBAL_SERVER))) &&
 			(enc = zend_hash_str_find(Z_ARRVAL(PG(http_globals)[TRACK_VARS_SERVER]), "HTTP_ACCEPT_ENCODING", sizeof("HTTP_ACCEPT_ENCODING") - 1))) {
 			convert_to_string(enc);
@@ -386,7 +389,11 @@ static zend_string *php_zlib_encode(const char *in_buf, size_t in_len, int encod
 	Z.zfree = php_zlib_free;
 
 	if (Z_OK == (status = deflateInit2(&Z, level, Z_DEFLATED, encoding, MAX_MEM_LEVEL, Z_DEFAULT_STRATEGY))) {
-		out = zend_string_alloc(PHP_ZLIB_BUFFER_SIZE_GUESS(in_len), 0);
+		out = zend_string_falloc(PHP_ZLIB_BUFFER_SIZE_GUESS(in_len), 0, /* fallible */ true);
+		if (UNEXPECTED(!out)) {
+			deflateEnd(&Z);
+			return NULL;
+		}
 
 		Z.next_in = (Bytef *) in_buf;
 		Z.next_out = (Bytef *) ZSTR_VAL(out);
@@ -423,7 +430,7 @@ static inline int php_zlib_inflate_rounds(z_stream *Z, size_t max, char **buf, s
 	buffer.size = (max && (max < Z->avail_in)) ? max : Z->avail_in;
 
 	do {
-		if ((max && (max <= buffer.used)) || !(buffer.aptr = erealloc_recoverable(buffer.data, buffer.size))) {
+		if ((max && (max <= buffer.used)) || !(buffer.aptr = safe_ferealloc(buffer.data, 1, buffer.size, 0, /* fallible */ true))) {
 			status = Z_MEM_ERROR;
 		} else {
 			buffer.data = buffer.aptr;
@@ -629,6 +636,10 @@ PHP_FUNCTION(gzfile)
 	memset(buf, 0, sizeof(buf));
 
 	while (php_stream_gets(stream, buf, sizeof(buf) - 1) != NULL) {
+		if (ZEND_HAS_OOM()) {
+			php_stream_close(stream);
+			RETURN_OOM();
+		}
 		add_index_string(return_value, i++, buf);
 	}
 	php_stream_close(stream);
@@ -779,11 +790,26 @@ PHP_ZLIB_DECODE_FUNC(gzdecode, PHP_ZLIB_ENCODING_GZIP);
 PHP_ZLIB_DECODE_FUNC(gzuncompress, PHP_ZLIB_ENCODING_DEFLATE);
 /* }}} */
 
+ZEND_ATTRIBUTE_NONNULL static zval *zlib_find_option(HashTable *options, const char *name, size_t name_len)
+{
+	zval *option = zend_hash_str_find(options, name, name_len);
+
+	if (!option) {
+		return NULL;
+	}
+
+	ZVAL_DEINDIRECT(option);
+
+	if (UNEXPECTED(Z_TYPE_P(option) == IS_UNDEF)) {
+		return NULL;
+	}
+	return option;
+}
+
 static bool zlib_create_dictionary_string(HashTable *options, char **dict, size_t *dictlen) {
 	zval *option_buffer;
 
-	if (options && (option_buffer = zend_hash_str_find(options, ZEND_STRL("dictionary"))) != NULL) {
-		ZVAL_DEINDIRECT(option_buffer);
+	if (options && (option_buffer = zlib_find_option(options, ZEND_STRL("dictionary"))) != NULL) {
 		ZVAL_DEREF(option_buffer);
 		switch (Z_TYPE_P(option_buffer)) {
 			case IS_STRING: {
@@ -853,14 +879,12 @@ static bool zlib_create_dictionary_string(HashTable *options, char **dict, size_
 ZEND_ATTRIBUTE_NONNULL static bool zlib_get_long_option(HashTable *options, const char *option_name, size_t option_name_len, zend_long *value)
 {
 	bool failed = false;
-	zval *option_buffer = zend_hash_str_find(options, option_name, option_name_len);
+	zval *option_buffer = zlib_find_option(options, option_name, option_name_len);
 
 	if (!option_buffer) {
 		return true;
 	}
 
-	/* The |H ZPP specifier may leave HashTable entries wrapped in IS_INDIRECT. */
-	ZVAL_DEINDIRECT(option_buffer);
 	*value = zval_try_get_long(option_buffer, &failed);
 	if (UNEXPECTED(failed)) {
 		zend_argument_type_error(
@@ -881,10 +905,22 @@ PHP_FUNCTION(inflate_init)
 	zend_long encoding, window = 15;
 	char *dict = NULL;
 	size_t dictlen = 0;
+	zval *options_zv = NULL;
 	HashTable *options = (HashTable *) &zend_empty_array;
 
-	if (SUCCESS != zend_parse_parameters(ZEND_NUM_ARGS(), "l|H", &encoding, &options)) {
+	if (SUCCESS != zend_parse_parameters(ZEND_NUM_ARGS(), "l|A", &encoding, &options_zv)) {
 		RETURN_THROWS();
+	}
+
+	if (options_zv) {
+		if (Z_TYPE_P(options_zv) == IS_OBJECT) {
+			php_error_docref(NULL, E_DEPRECATED,
+				"Passing an object for argument #2 $option to inflate_init() is deprecated, call get_object_vars() first instead");
+			if (UNEXPECTED(EG(exception))) {
+				RETURN_THROWS();
+			}
+		}
+		options = HASH_OF(options_zv);
 	}
 
 	if (!zlib_get_long_option(options, ZEND_STRL("window"), &window)) {
@@ -918,6 +954,7 @@ PHP_FUNCTION(inflate_init)
 	ctx->inflateDictlen = dictlen;
 	ctx->status = Z_OK;
 
+	zend_long orig_encoding = encoding;
 	if (encoding < 0) {
 		encoding += 15 - window;
 	} else {
@@ -931,7 +968,7 @@ PHP_FUNCTION(inflate_init)
 		RETURN_FALSE;
 	}
 
-	if (encoding == PHP_ZLIB_ENCODING_RAW && dictlen > 0) {
+	if (orig_encoding == PHP_ZLIB_ENCODING_RAW && dictlen > 0) {
 		switch (inflateSetDictionary(&ctx->Z, (Bytef *) ctx->inflateDict, ctx->inflateDictlen)) {
 			case Z_OK:
 				efree(ctx->inflateDict);
@@ -947,6 +984,22 @@ PHP_FUNCTION(inflate_init)
 	}
 }
 /* }}} */
+
+/* Releases *out and returns false on failure. */
+static bool php_zlib_inflate_grow(zend_string **out, size_t buffer_used, size_t chunk_size, z_stream *Z)
+{
+	zend_string *grown = zend_string_fextend(*out, ZSTR_LEN(*out) + chunk_size, 0, /* fallible */ true);
+
+	if (UNEXPECTED(grown == NULL)) {
+		zend_string_release_ex(*out, 0);
+		return false;
+	}
+
+	*out = grown;
+	Z->avail_out = chunk_size;
+	Z->next_out = (Bytef *) ZSTR_VAL(grown) + buffer_used;
+	return true;
+}
 
 /* {{{ Incrementally inflate encoded data in the specified context */
 PHP_FUNCTION(inflate_add)
@@ -1006,9 +1059,9 @@ PHP_FUNCTION(inflate_add)
 			case Z_OK:
 				if (ctx->Z.avail_out == 0) {
 					/* more output buffer space needed; realloc and try again */
-					out = zend_string_extend(out, ZSTR_LEN(out) + CHUNK_SIZE, 0);
-					ctx->Z.avail_out = CHUNK_SIZE;
-					ctx->Z.next_out = (Bytef *) ZSTR_VAL(out) + buffer_used;
+					if (UNEXPECTED(!php_zlib_inflate_grow(&out, buffer_used, CHUNK_SIZE, &ctx->Z))) {
+						RETURN_OOM();
+					}
 					break;
 				} else {
 					goto complete;
@@ -1018,9 +1071,9 @@ PHP_FUNCTION(inflate_add)
 			case Z_BUF_ERROR:
 				if (flush_type == Z_FINISH && ctx->Z.avail_out == 0) {
 					/* more output buffer space needed; realloc and try again */
-					out = zend_string_extend(out, ZSTR_LEN(out) + CHUNK_SIZE, 0);
-					ctx->Z.avail_out = CHUNK_SIZE;
-					ctx->Z.next_out = (Bytef *) ZSTR_VAL(out) + buffer_used;
+					if (UNEXPECTED(!php_zlib_inflate_grow(&out, buffer_used, CHUNK_SIZE, &ctx->Z))) {
+						RETURN_OOM();
+					}
 					break;
 				} else {
 					/* No more input data; we're finished */
@@ -1100,10 +1153,22 @@ PHP_FUNCTION(deflate_init)
 	zend_long encoding, level = -1, memory = 8, window = 15, strategy = Z_DEFAULT_STRATEGY;
 	char *dict = NULL;
 	size_t dictlen = 0;
+	zval *options_zv = NULL;
 	HashTable *options = (HashTable*)&zend_empty_array;
 
-	if (SUCCESS != zend_parse_parameters(ZEND_NUM_ARGS(), "l|H", &encoding, &options)) {
+	if (SUCCESS != zend_parse_parameters(ZEND_NUM_ARGS(), "l|A", &encoding, &options_zv)) {
 		RETURN_THROWS();
+	}
+
+	if (options_zv) {
+		if (Z_TYPE_P(options_zv) == IS_OBJECT) {
+			php_error_docref(NULL, E_DEPRECATED,
+				"Passing an object for argument #2 $option to deflate_init() is deprecated, call get_object_vars() first instead");
+			if (UNEXPECTED(EG(exception))) {
+				RETURN_THROWS();
+			}
+		}
+		options = HASH_OF(options_zv);
 	}
 
 	if (!zlib_get_long_option(options, ZEND_STRL("level"), &level)) {
@@ -1227,7 +1292,10 @@ PHP_FUNCTION(deflate_add)
 
 	out_size = PHP_ZLIB_BUFFER_SIZE_GUESS(in_len);
 	out_size = (out_size < 64) ? 64 : out_size;
-	out = zend_string_alloc(out_size, 0);
+	out = zend_string_falloc(out_size, 0, /* fallible */ true);
+	if (UNEXPECTED(!out)) {
+		RETURN_OOM();
+	}
 
 	ctx->Z.next_in = (Bytef *) in_buf;
 	ctx->Z.next_out = (Bytef *) ZSTR_VAL(out);

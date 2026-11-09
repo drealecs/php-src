@@ -21,13 +21,11 @@
 #include <unicode/unistr.h>
 #endif
 
-extern "C" {
 #include "php_intl.h"
 #include <unicode/unorm2.h>
 #include "normalizer.h"
 #include "normalizer_class.h"
 #include "intl_convert.h"
-}
 #include <unicode/utf8.h>
 
 
@@ -73,7 +71,7 @@ static UBool intl_is_normalized(zend_long form, const UChar *uinput, int32_t uin
 }/*}}}*/
 
 /* {{{ Normalize a string. */
-U_CFUNC PHP_FUNCTION( normalizer_normalize )
+PHP_INTL_FUNCTION_WITH_ERROR_RESET(normalizer_normalize)
 {
 	char*			input = NULL;
 	/* form is optional, defaults to FORM_C */
@@ -92,7 +90,6 @@ U_CFUNC PHP_FUNCTION( normalizer_normalize )
 
 	int32_t			size_needed;
 
-	intl_error_reset( NULL );
 
 	/* Parse parameters. */
 	if( zend_parse_method_parameters( ZEND_NUM_ARGS(), getThis(), "s|l",
@@ -115,7 +112,7 @@ U_CFUNC PHP_FUNCTION( normalizer_normalize )
 		case NORMALIZER_FORM_KC_CF:
 			break;
 		default:
-			zend_argument_value_error(2, "must be a a valid normalization form");
+			zend_argument_value_error(2, "must be a valid normalization form");
 			RETURN_THROWS();
 	}
 
@@ -142,7 +139,10 @@ U_CFUNC PHP_FUNCTION( normalizer_normalize )
 
 	/* Allocate memory for the destination buffer for normalization */
 	uret_len = uinput_len * expansion_factor;
-	uret_buf = eumalloc( uret_len + 1 );
+	uret_buf = (UChar*)safe_femalloc(uret_len + 1, sizeof(UChar), 0, /* fallible */ true);
+	if (!uret_buf) {
+		RETURN_OOM();
+	}
 
 	/* normalize */
 	size_needed = intl_normalize(form, uinput, uinput_len, uret_buf, uret_len, &status);
@@ -163,7 +163,11 @@ U_CFUNC PHP_FUNCTION( normalizer_normalize )
 		 * uret_buf =  eurealloc(uret_buf, size_needed + 1);
 		 */
 		efree( uret_buf );
-		uret_buf = eumalloc( size_needed + 1 );
+		uret_buf = (UChar*)safe_femalloc(size_needed + 1, sizeof(UChar), 0, /* fallible */ true);
+		if (!uret_buf) {
+			efree(uinput);
+			RETURN_OOM();
+		}
 		uret_len = size_needed;
 
 		status = U_ZERO_ERROR;
@@ -202,7 +206,7 @@ U_CFUNC PHP_FUNCTION( normalizer_normalize )
 /* }}} */
 
 /* {{{ Test if a string is in a given normalization form. */
-U_CFUNC PHP_FUNCTION( normalizer_is_normalized )
+PHP_INTL_FUNCTION_WITH_ERROR_RESET(normalizer_is_normalized)
 {
 	char*	 	input = NULL;
 	/* form is optional, defaults to FORM_C */
@@ -215,7 +219,6 @@ U_CFUNC PHP_FUNCTION( normalizer_is_normalized )
 
 	UBool		uret = false;
 
-	intl_error_reset( NULL );
 
 	/* Parse parameters. */
 	if( zend_parse_method_parameters( ZEND_NUM_ARGS(), getThis(), "s|l",
@@ -232,7 +235,7 @@ U_CFUNC PHP_FUNCTION( normalizer_is_normalized )
 		case NORMALIZER_FORM_KC_CF:
 			break;
 		default:
-			zend_argument_value_error(2, "must be a a valid normalization form");
+			zend_argument_value_error(2, "must be a valid normalization form");
 			RETURN_THROWS();
 	}
 
@@ -278,7 +281,7 @@ U_CFUNC PHP_FUNCTION( normalizer_is_normalized )
 /* }}} */
 
 /* {{{ Returns the Decomposition_Mapping property for the given UTF-8 encoded code point. */
-U_CFUNC PHP_FUNCTION( normalizer_get_raw_decomposition )
+PHP_INTL_FUNCTION_WITH_ERROR_RESET(normalizer_get_raw_decomposition)
 {
 	char* input = NULL;
 	size_t input_length = 0;
@@ -293,7 +296,6 @@ U_CFUNC PHP_FUNCTION( normalizer_get_raw_decomposition )
 
 	zend_long form = NORMALIZER_DEFAULT;
 
-	intl_error_reset(NULL);
 
 	ZEND_PARSE_PARAMETERS_START(1, 2)
 		Z_PARAM_STRING(input, input_length)

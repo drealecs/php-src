@@ -16,12 +16,14 @@
 
 #include <unicode/calendar.h>
 
-extern "C" {
 #include "../php_intl.h"
 #define USE_CALENDAR_POINTER 1
 #include "../calendar/calendar_class.h"
+#include "common_date.h"
+
+U_CDECL_BEGIN
 #include <ext/date/php_date.h>
-}
+U_CDECL_END
 
 using icu::TimeZone;
 using icu::UnicodeString;
@@ -30,7 +32,7 @@ using icu::UnicodeString;
 
 /* {{{ timezone_convert_datetimezone
  *      The timezone in DateTime and DateTimeZone is not unified. */
-U_CFUNC TimeZone *timezone_convert_datetimezone(
+TimeZone *timezone_convert_datetimezone(
 	int type, void *object, bool is_datetime,
 	intl_error *outside_error)
 {
@@ -57,7 +59,7 @@ U_CFUNC TimeZone *timezone_convert_datetimezone(
 
 			if (UNEXPECTED(offset_mins <= -24 * 60 || offset_mins >= 24 * 60)) {
 				intl_errors_set(outside_error, U_ILLEGAL_ARGUMENT_ERROR,
-					"object has an time zone offset that's too large");
+					"object has a time zone offset that is too large");
 				return NULL;
 			}
 
@@ -88,7 +90,7 @@ U_CFUNC TimeZone *timezone_convert_datetimezone(
 }
 /* }}} */
 
-U_CFUNC zend_result intl_datetime_decompose(zend_object *obj, double *millis, TimeZone **tz,
+zend_result intl_datetime_decompose(zend_object *obj, double *millis, TimeZone **tz,
 		intl_error *err)
 {
 	char	*message;
@@ -152,7 +154,7 @@ U_CFUNC zend_result intl_datetime_decompose(zend_object *obj, double *millis, Ti
 	return SUCCESS;
 }
 
-U_CFUNC double intl_zval_to_millis(zval *z, intl_error *err)
+double intl_zval_to_millis(zval *z, intl_error *err)
 {
 	double	rv = ZEND_NAN;
 	zend_long	lv;

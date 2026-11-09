@@ -27,6 +27,7 @@
 #include "phpdbg_help.h"
 #include "phpdbg_arginfo.h"
 #include "zend_vm.h"
+#include "zend_runtime_module.h"
 #include "php_ini_builder.h"
 #include "php_main.h"
 
@@ -235,6 +236,13 @@ static PHP_RSHUTDOWN_FUNCTION(phpdbg) /* {{{ */
 		fclose(PHPDBG_G(stdin_file));
 		PHPDBG_G(stdin_file) = NULL;
 	}
+
+	return SUCCESS;
+} /* }}} */
+
+static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(phpdbg) /* {{{ */
+{
+	phpdbg_release_watch_elements();
 
 	return SUCCESS;
 } /* }}} */
@@ -681,7 +689,9 @@ static zend_module_entry sapi_phpdbg_module_entry = {
 	PHP_RSHUTDOWN(phpdbg),
 	NULL,
 	PHPDBG_VERSION,
-	STANDARD_MODULE_PROPERTIES
+	NO_MODULE_GLOBALS,
+	ZEND_MODULE_POST_ZEND_DEACTIVATE_N(phpdbg),
+	STANDARD_MODULE_PROPERTIES_EX
 };
 
 static inline int php_sapi_phpdbg_module_startup(sapi_module_struct *module) /* {{{ */
@@ -867,6 +877,17 @@ static ssize_t phpdbg_stdiop_write(php_stream *stream, const char *buf, size_t c
 }
 #endif
 
+static void phpdbg_replace_constant(zend_constant *constant)
+{
+	zend_constant *old_constant = zend_hash_find_ptr(EG(zend_constants), constant->name);
+
+	if (old_constant) {
+		zend_runtime_context_remove_visible_internal_constant(constant->name, old_constant);
+		zend_hash_del(EG(zend_constants), constant->name);
+	}
+	zend_register_constant(constant);
+}
+
 /* copied from sapi/cli/php_cli.c cli_register_file_handles */
 void phpdbg_register_file_handles(void) /* {{{ */
 {
@@ -899,20 +920,17 @@ void phpdbg_register_file_handles(void) /* {{{ */
 	ic.value = zin;
 	Z_CONSTANT_FLAGS(ic.value) = 0;
 	ic.name = zend_string_init(ZEND_STRL("STDIN"), 0);
-	zend_hash_del(EG(zend_constants), ic.name);
-	zend_register_constant(&ic);
+	phpdbg_replace_constant(&ic);
 
 	oc.value = zout;
 	Z_CONSTANT_FLAGS(oc.value) = 0;
 	oc.name = zend_string_init(ZEND_STRL("STDOUT"), 0);
-	zend_hash_del(EG(zend_constants), oc.name);
-	zend_register_constant(&oc);
+	phpdbg_replace_constant(&oc);
 
 	ec.value = zerr;
 	Z_CONSTANT_FLAGS(ec.value) = 0;
 	ec.name = zend_string_init(ZEND_STRL("STDERR"), 0);
-	zend_hash_del(EG(zend_constants), ec.name);
-	zend_register_constant(&ec);
+	phpdbg_replace_constant(&ec);
 }
 /* }}} */
 
@@ -944,7 +962,7 @@ static sapi_module_struct phpdbg_sapi_module = {
 	php_sapi_phpdbg_register_vars,  /* register server variables */
 	php_sapi_phpdbg_log_message,    /* Log message */
 	NULL,                           /* Get request time */
-	NULL,                           /* Child terminate */
+
 	STANDARD_SAPI_MODULE_PROPERTIES
 };
 /* }}} */
@@ -1051,7 +1069,7 @@ static void phpdbg_signal_handler(int sig, siginfo_t *info, void *context) /* {{
 } /* }}} */
 
 
-static ZEND_NORETURN void phpdbg_sighup_handler(int sig) /* {{{ */
+ZEND_NORETURN static void phpdbg_sighup_handler(int sig) /* {{{ */
 {
 	exit(0);
 } /* }}} */
@@ -1440,7 +1458,7 @@ phpdbg_main:
 
 		if (php_request_startup() == FAILURE) {
 			PUTS("Could not startup");
-			return 1;
+			goto phpdbg_out;
 		}
 
 #ifndef _WIN32

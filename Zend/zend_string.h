@@ -26,7 +26,7 @@
 
 BEGIN_EXTERN_C()
 
-ZEND_API ZEND_COLD ZEND_NORETURN void zend_error_noreturn(int type, const char *format, ...) ZEND_ATTRIBUTE_FORMAT(printf, 2, 3);
+ZEND_NORETURN ZEND_API ZEND_COLD void zend_error_noreturn(int type, const char *format, ...) ZEND_ATTRIBUTE_FORMAT(printf, 2, 3);
 
 #include "zend_multiply.h"
 
@@ -43,6 +43,7 @@ ZEND_API extern zend_string_init_existing_interned_func_t zend_string_init_exist
 ZEND_API zend_ulong ZEND_FASTCALL zend_string_hash_func(zend_string *str);
 ZEND_API zend_ulong ZEND_FASTCALL zend_hash_func(const char *str, size_t len);
 ZEND_API zend_string* ZEND_FASTCALL zend_interned_string_find_permanent(zend_string *str);
+ZEND_API zend_string* ZEND_FASTCALL zend_string_finit_existing_interned(const char *str, size_t len, bool permanent, bool fallible);
 ZEND_API void ZEND_FASTCALL zend_bin2hex(char *out, const unsigned char *in, size_t in_len);
 ZEND_API zend_string *zend_bin2hex_str(const unsigned char *in, size_t in_len);
 
@@ -185,9 +186,13 @@ static zend_always_inline uint32_t zend_string_delref(zend_string *s)
 	return 1;
 }
 
-static zend_always_inline zend_string *zend_string_alloc(size_t len, bool persistent)
+/* Fallible variant of zend_string_alloc */
+static zend_always_inline zend_string *zend_string_falloc(size_t len, bool persistent, bool fallible)
 {
-	zend_string *ret = (zend_string *)pemalloc(ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(len)), persistent);
+	zend_string *ret = (zend_string *)fpemalloc(ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(len)), persistent, fallible);
+	if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(ret == NULL)) {
+		return ret;
+	}
 
 	GC_SET_REFCOUNT(ret, 1);
 	GC_TYPE_INFO(ret) = GC_STRING | ((persistent ? IS_STR_PERSISTENT : 0) << GC_FLAGS_SHIFT);
@@ -196,15 +201,29 @@ static zend_always_inline zend_string *zend_string_alloc(size_t len, bool persis
 	return ret;
 }
 
-static zend_always_inline zend_string *zend_string_safe_alloc(size_t n, size_t m, size_t l, bool persistent)
+static zend_always_inline zend_string *zend_string_alloc(size_t len, bool persistent)
 {
-	zend_string *ret = (zend_string *)safe_pemalloc(n, m, ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(l)), persistent);
+	return zend_string_falloc(len, persistent, /* fallible */ false);
+}
+
+/* Fallible variant of zend_string_safe_alloc */
+static zend_always_inline zend_string *zend_string_safe_falloc(size_t n, size_t m, size_t l, bool persistent, bool fallible)
+{
+	zend_string *ret = (zend_string *)safe_fpemalloc(n, m, ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(l)), persistent, fallible);
+	if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(ret == NULL)) {
+		return ret;
+	}
 
 	GC_SET_REFCOUNT(ret, 1);
 	GC_TYPE_INFO(ret) = GC_STRING | ((persistent ? IS_STR_PERSISTENT : 0) << GC_FLAGS_SHIFT);
 	ZSTR_H(ret) = 0;
 	ZSTR_LEN(ret) = (n * m) + l;
 	return ret;
+}
+
+static zend_always_inline zend_string *zend_string_safe_alloc(size_t n, size_t m, size_t l, bool persistent)
+{
+	return zend_string_safe_falloc(n, m, l, persistent, /* fallible */ false);
 }
 
 static zend_always_inline zend_string *zend_string_init(const char *str, size_t len, bool persistent)
@@ -216,15 +235,32 @@ static zend_always_inline zend_string *zend_string_init(const char *str, size_t 
 	return ret;
 }
 
-static zend_always_inline zend_string *zend_string_init_fast(const char *str, size_t len)
+static zend_always_inline zend_string *zend_string_finit(const char *str, size_t len, bool persistent, bool fallible)
+{
+	zend_string *ret = zend_string_safe_falloc(len, 1, 0, persistent, fallible);
+	if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(ret == NULL)) {
+		return NULL;
+	}
+
+	memcpy(ZSTR_VAL(ret), str, len);
+	ZSTR_VAL(ret)[len] = '\0';
+	return ret;
+}
+
+static zend_always_inline zend_string *zend_string_finit_fast(const char *str, size_t len, bool fallible)
 {
 	if (len > 1) {
-		return zend_string_init(str, len, 0);
+		return zend_string_finit(str, len, 0, fallible);
 	} else if (len == 0) {
 		return zend_empty_string;
 	} else /* if (len == 1) */ {
 		return ZSTR_CHAR((zend_uchar) *str);
 	}
+}
+
+static zend_always_inline zend_string *zend_string_init_fast(const char *str, size_t len)
+{
+	return zend_string_finit_fast(str, len, /* fallible */ false);
 }
 
 static zend_always_inline zend_string *zend_string_copy(zend_string *s)
@@ -257,20 +293,58 @@ static zend_always_inline zend_string *zend_string_separate(zend_string *s, bool
 	return s;
 }
 
-static zend_always_inline zend_string *zend_string_realloc(zend_string *s, size_t len, bool persistent)
+static zend_always_inline zend_string *zend_string_frealloc(zend_string *s, size_t len, bool persistent, bool fallible)
 {
 	zend_string *ret;
 
 	if (!ZSTR_IS_INTERNED(s)) {
 		if (EXPECTED(GC_REFCOUNT(s) == 1)) {
-			ret = (zend_string *)perealloc(s, ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(len)), persistent);
+			ret = (zend_string *)safe_fperealloc(s, len, sizeof(char), ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(0)), persistent, fallible);
+			if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!ret)) {
+				return NULL;
+			}
 			ZSTR_LEN(ret) = len;
 			zend_string_forget_hash_val(ret);
 			return ret;
 		}
 	}
-	ret = zend_string_alloc(len, persistent);
+	ret = zend_string_falloc(len, persistent, fallible);
+	if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!ret)) {
+		return NULL;
+	}
 	memcpy(ZSTR_VAL(ret), ZSTR_VAL(s), MIN(len, ZSTR_LEN(s)) + 1);
+	if (!ZSTR_IS_INTERNED(s)) {
+		GC_DELREF(s);
+	}
+	return ret;
+}
+
+static zend_always_inline zend_string *zend_string_realloc(zend_string *s, size_t len, bool persistent)
+{
+	return zend_string_frealloc(s, len, persistent, /* fallible */ false);
+}
+
+static zend_always_inline zend_string *zend_string_fextend(zend_string *s, size_t len, bool persistent, bool fallible)
+{
+	zend_string *ret;
+
+	ZEND_ASSERT(len >= ZSTR_LEN(s));
+	if (!ZSTR_IS_INTERNED(s)) {
+		if (EXPECTED(GC_REFCOUNT(s) == 1)) {
+			ret = (zend_string *)safe_fperealloc(s, len, sizeof(char), ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(0)), persistent, fallible);
+			if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!ret)) {
+				return NULL;
+			}
+			ZSTR_LEN(ret) = len;
+			zend_string_forget_hash_val(ret);
+			return ret;
+		}
+	}
+	ret = zend_string_falloc(len, persistent, fallible);
+	if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!ret)) {
+		return NULL;
+	}
+	memcpy(ZSTR_VAL(ret), ZSTR_VAL(s), ZSTR_LEN(s) + 1);
 	if (!ZSTR_IS_INTERNED(s)) {
 		GC_DELREF(s);
 	}
@@ -279,19 +353,30 @@ static zend_always_inline zend_string *zend_string_realloc(zend_string *s, size_
 
 static zend_always_inline zend_string *zend_string_extend(zend_string *s, size_t len, bool persistent)
 {
+	return zend_string_fextend(s, len, persistent, /* fallible */ false);
+}
+
+static zend_always_inline zend_string *zend_string_ftruncate(zend_string *s, size_t len, bool persistent, bool fallible)
+{
 	zend_string *ret;
 
-	ZEND_ASSERT(len >= ZSTR_LEN(s));
+	ZEND_ASSERT(len <= ZSTR_LEN(s));
 	if (!ZSTR_IS_INTERNED(s)) {
 		if (EXPECTED(GC_REFCOUNT(s) == 1)) {
-			ret = (zend_string *)perealloc(s, ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(len)), persistent);
+			ret = (zend_string *)safe_fperealloc(s, len, sizeof(char), ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(0)), persistent, fallible);
+			if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!ret)) {
+				return NULL;
+			}
 			ZSTR_LEN(ret) = len;
 			zend_string_forget_hash_val(ret);
 			return ret;
 		}
 	}
-	ret = zend_string_alloc(len, persistent);
-	memcpy(ZSTR_VAL(ret), ZSTR_VAL(s), ZSTR_LEN(s) + 1);
+	ret = zend_string_falloc(len, persistent, fallible);
+	if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!ret)) {
+		return NULL;
+	}
+	memcpy(ZSTR_VAL(ret), ZSTR_VAL(s), len + 1);
 	if (!ZSTR_IS_INTERNED(s)) {
 		GC_DELREF(s);
 	}
@@ -300,19 +385,29 @@ static zend_always_inline zend_string *zend_string_extend(zend_string *s, size_t
 
 static zend_always_inline zend_string *zend_string_truncate(zend_string *s, size_t len, bool persistent)
 {
+	return zend_string_ftruncate(s, len, persistent, /*fallible */ false);
+}
+
+static zend_always_inline zend_string *zend_string_safe_frealloc(zend_string *s, size_t n, size_t m, size_t l, bool persistent, bool fallible)
+{
 	zend_string *ret;
 
-	ZEND_ASSERT(len <= ZSTR_LEN(s));
 	if (!ZSTR_IS_INTERNED(s)) {
-		if (EXPECTED(GC_REFCOUNT(s) == 1)) {
-			ret = (zend_string *)perealloc(s, ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(len)), persistent);
-			ZSTR_LEN(ret) = len;
+		if (GC_REFCOUNT(s) == 1) {
+			ret = (zend_string *)safe_fperealloc(s, n, m, ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(l)), persistent, fallible);
+			if (ZEND_CONST_COND(fallible, true) && !ret) {
+				return NULL;
+			}
+			ZSTR_LEN(ret) = (n * m) + l;
 			zend_string_forget_hash_val(ret);
 			return ret;
 		}
 	}
-	ret = zend_string_alloc(len, persistent);
-	memcpy(ZSTR_VAL(ret), ZSTR_VAL(s), len + 1);
+	ret = zend_string_safe_falloc(n, m, l, persistent, fallible);
+	if (ZEND_CONST_COND(fallible, true) && !ret) {
+		return NULL;
+	}
+	memcpy(ZSTR_VAL(ret), ZSTR_VAL(s), MIN((n * m) + l, ZSTR_LEN(s)) + 1);
 	if (!ZSTR_IS_INTERNED(s)) {
 		GC_DELREF(s);
 	}
@@ -321,26 +416,11 @@ static zend_always_inline zend_string *zend_string_truncate(zend_string *s, size
 
 static zend_always_inline zend_string *zend_string_safe_realloc(zend_string *s, size_t n, size_t m, size_t l, bool persistent)
 {
-	zend_string *ret;
-
-	if (!ZSTR_IS_INTERNED(s)) {
-		if (GC_REFCOUNT(s) == 1) {
-			ret = (zend_string *)safe_perealloc(s, n, m, ZEND_MM_ALIGNED_SIZE(_ZSTR_STRUCT_SIZE(l)), persistent);
-			ZSTR_LEN(ret) = (n * m) + l;
-			zend_string_forget_hash_val(ret);
-			return ret;
-		}
-	}
-	ret = zend_string_safe_alloc(n, m, l, persistent);
-	memcpy(ZSTR_VAL(ret), ZSTR_VAL(s), MIN((n * m) + l, ZSTR_LEN(s)) + 1);
-	if (!ZSTR_IS_INTERNED(s)) {
-		GC_DELREF(s);
-	}
-	return ret;
+	return zend_string_safe_frealloc(s, n, m, l, persistent, /* fallible */ false);
 }
 
 static zend_always_inline char *zend_cstr_append_char(const char *str, size_t len, char c) {
-	char *res = (char *)safe_emalloc(len, 1, 2);
+	char *res = (char *)safe_emalloc(len, sizeof(char), 2);
 	if (len > 0) {
 		memcpy(res, str, len);
 	}
@@ -492,6 +572,32 @@ static zend_always_inline bool zend_string_starts_with_ci(const zend_string *str
 
 #define zend_string_starts_with_literal_ci(str, prefix) \
 	zend_string_starts_with_cstr_ci(str, "" prefix, sizeof(prefix) - 1)
+
+static zend_always_inline bool zend_string_ends_with_cstr(const zend_string *str, const char *suffix, size_t suffix_length)
+{
+	return ZSTR_LEN(str) >= suffix_length && !memcmp(ZSTR_VAL(str) + ZSTR_LEN(str) - suffix_length, suffix, suffix_length);
+}
+
+static zend_always_inline bool zend_string_ends_with(const zend_string *str, const zend_string *suffix)
+{
+	return zend_string_ends_with_cstr(str, ZSTR_VAL(suffix), ZSTR_LEN(suffix));
+}
+
+#define zend_string_ends_with_literal(str, suffix) \
+	zend_string_ends_with_cstr(str, "" suffix, sizeof(suffix) - 1)
+
+static zend_always_inline bool zend_string_ends_with_cstr_ci(const zend_string *str, const char *suffix, size_t suffix_length)
+{
+	return ZSTR_LEN(str) >= suffix_length && !strncasecmp(ZSTR_VAL(str) + ZSTR_LEN(str) - suffix_length, suffix, suffix_length);
+}
+
+static zend_always_inline bool zend_string_ends_with_ci(const zend_string *str, const zend_string *suffix)
+{
+	return zend_string_ends_with_cstr_ci(str, ZSTR_VAL(suffix), ZSTR_LEN(suffix));
+}
+
+#define zend_string_ends_with_literal_ci(str, suffix) \
+	zend_string_ends_with_cstr_ci(str, "" suffix, sizeof(suffix) - 1)
 
 /*
  * DJBX33A (Daniel J. Bernstein, Times 33 with Addition)
@@ -707,6 +813,11 @@ default: ZEND_UNREACHABLE();
 	_(ZEND_STR_AUTOGLOBAL_ENV,         "_ENV") \
 	_(ZEND_STR_AUTOGLOBAL_REQUEST,     "_REQUEST") \
 	_(ZEND_STR_COUNT,                  "count") \
+	_(ZEND_STR_FUNC_NUM_ARGS,          "func_num_args") \
+	_(ZEND_STR_FUNC_GET_ARGS,          "func_get_args") \
+	_(ZEND_STR_ASSERT,                 "assert") \
+	_(ZEND_STR_CALL_USER_FUNC,         "call_user_func") \
+	_(ZEND_STR_ARRAY_SLICE,            "array_slice") \
 	_(ZEND_STR_SENSITIVEPARAMETER,     "SensitiveParameter") \
 	_(ZEND_STR_CONST_EXPR_PLACEHOLDER, "[constant expression]") \
 	_(ZEND_STR_DEPRECATED_CAPITALIZED, "Deprecated") \
@@ -720,6 +831,7 @@ default: ZEND_UNREACHABLE();
 	_(ZEND_STR_8_DOT_3,                "8.3") \
 	_(ZEND_STR_8_DOT_4,                "8.4") \
 	_(ZEND_STR_8_DOT_5,                "8.5") \
+	_(ZEND_STR_8_DOT_6,                "8.6") \
 
 
 typedef enum _zend_known_string_id {

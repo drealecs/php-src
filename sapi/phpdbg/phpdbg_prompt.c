@@ -1192,7 +1192,7 @@ static const char *phpdbg_load_module_or_extension(zend_string **path, const cha
 		phpdbg_error("extension_dir ini setting contains a nul byte");
 		return NULL;
 	}
-	if (memchr(ZSTR_VAL(*path), '/', ZSTR_LEN(*path)) != NULL || memchr(ZSTR_VAL(*path), '/', ZSTR_LEN(*path)) != NULL) {
+	if (memchr(ZSTR_VAL(*path), '/', ZSTR_LEN(*path)) != NULL || memchr(ZSTR_VAL(*path), DEFAULT_SLASH, ZSTR_LEN(*path)) != NULL) {
 		/* path is fine */
 	} else if (extension_dir && ZSTR_LEN(extension_dir) > 0) {
 		zend_string *libpath;
@@ -1464,9 +1464,7 @@ PHPDBG_COMMAND(clear) /* {{{ */
 
 PHPDBG_COMMAND(list) /* {{{ */
 {
-	if (!param) {
-		return PHPDBG_LIST_HANDLER(lines)(PHPDBG_COMMAND_ARGS);
-	} else switch (param->type) {
+	switch (param->type) {
 		case NUMERIC_PARAM:
 			return PHPDBG_LIST_HANDLER(lines)(PHPDBG_COMMAND_ARGS);
 
@@ -1652,7 +1650,7 @@ void phpdbg_execute_ex(zend_execute_data *execute_data) /* {{{ */
 		}
 
 #ifdef ZEND_WIN32
-		if (zend_atomic_bool_load_ex(&EG(timed_out))) {
+		if (atomic_load(&EG(timed_out))) {
 			zend_timeout();
 		}
 #endif
@@ -1817,7 +1815,7 @@ next:
 			}
 		}
 	}
-	zend_error_noreturn(E_ERROR, "Arrived at end of main loop which shouldn't happen");
+	zend_error_noreturn(E_CORE_ERROR, "Arrived at end of main loop which shouldn't happen");
 } /* }}} */
 
 /* only if *not* interactive and while executing */

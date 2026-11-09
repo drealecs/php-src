@@ -1,5 +1,4 @@
-/*-
- * Copyright (c) 2008 Christos Zoulas
+/*- * Copyright (c) 2008 Christos Zoulas
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,7 +34,7 @@
 #include "file.h"
 
 #ifndef lint
-FILE_RCSID("@(#)$File: cdf.c,v 1.124 2024/11/25 21:24:59 christos Exp $")
+FILE_RCSID("@(#)$File: cdf.c,v 1.129 2026/06/02 17:57:22 christos Exp $")
 #endif
 
 #include <assert.h>
@@ -93,9 +92,44 @@ file_private union {
 			    CDF_TOLE8(CAST(uint64_t, x))))
 #define CDF_GETUINT32(x, y)	cdf_getuint32(x, y)
 
-#define CDF_MALLOC(n) emalloc(n)
-#define CDF_REALLOC(p, n) erealloc(p, n)
-#define CDF_CALLOC(n, u) ecalloc(n, u)
+#define CDF_MALLOC(n) cdf_malloc(__FILE__, __LINE__, (n))
+#define CDF_REALLOC(p, n) cdf_realloc(__FILE__, __LINE__, (p), (n))
+#define CDF_CALLOC(n, u) cdf_calloc(__FILE__, __LINE__, (n), (u))
+
+/*ARGSUSED*/
+static void *
+cdf_malloc(const char *file,
+    size_t line, size_t n)
+{
+	DPRINTF(("%s,%" SIZE_T_FORMAT "u: %s %" SIZE_T_FORMAT "u\n",
+	    file, line, __func__, n));
+	return femalloc(n, /* fallible */ true);
+}
+
+/*ARGSUSED*/
+static void *
+cdf_realloc(const char *file,
+    size_t line, void *p, size_t n)
+{
+	DPRINTF(("%s,%" SIZE_T_FORMAT "u: %s %" SIZE_T_FORMAT "u\n",
+	    file, line, __func__, n));
+	return safe_ferealloc(p, 1, n, 0, /* fallible */ true);
+}
+
+/*ARGSUSED*/
+static void *
+cdf_calloc(const char *file,
+    size_t line, size_t n, size_t u)
+{
+	DPRINTF(("%s,%" SIZE_T_FORMAT "u: %s %" SIZE_T_FORMAT "u %"
+	    SIZE_T_FORMAT "u\n", file, line, __func__, n, u));
+	void *data = safe_femalloc(n, u, 0, /* fallible */ true);
+	if (!data) {
+		return NULL;
+	}
+	memset(data, 0, n * u);
+	return data;
+}
 
 #if defined(HAVE_BYTESWAP_H)
 # define _cdf_tole2(x)	bswap_16(x)
@@ -463,6 +497,11 @@ cdf_read_sat(const cdf_info_t *info, cdf_header_t *h, cdf_sat_t *sat)
 	}
 
 	sat->sat_len = h->h_num_sectors_in_master_sat * nsatpersec + i;
+#define CDF_SAT_LIMIT	(16 * 1024 * 1024)
+	if (ss != 0 && sat->sat_len > CDF_SAT_LIMIT / ss) {
+		errno = EFTYPE;
+		return -1;
+	}
 	DPRINTF(("sat_len = %" SIZE_T_FORMAT "u ss = %" SIZE_T_FORMAT "u\n",
 	    sat->sat_len, ss));
 	if ((sat->sat_tab = CAST(cdf_secid_t *, CDF_CALLOC(sat->sat_len, ss)))
@@ -802,7 +841,7 @@ out:
 	return 0;
 }
 
-file_private int
+file_protected int
 cdf_namecmp(const char *d, const uint16_t *s, size_t l)
 {
 	for (; l--; d++, s++)
@@ -852,12 +891,12 @@ cdf_find_stream(const cdf_dir_t *dir, const char *name, int type)
 {
 	size_t i, name_len = strlen(name) + 1;
 
-	for (i = dir->dir_len; i > 0; i--)
-		if (dir->dir_tab[i - 1].d_type == type &&
-		    cdf_namecmp(name, dir->dir_tab[i - 1].d_name, name_len)
+	for (i = 1; i <= dir->dir_len; i++)
+		if (dir->dir_tab[i-1].d_type == type &&
+		    cdf_namecmp(name, dir->dir_tab[i-1].d_name, name_len)
 		    == 0)
 			break;
-	if (i > 0)
+	if (i <= dir->dir_len)
 		return CAST(int, i);
 
 	DPRINTF(("Cannot find type %d `%s'\n", type, name));
@@ -1168,6 +1207,8 @@ cdf_unpack_catalog(const cdf_header_t *h, const cdf_stream_t *sst,
 	const uint16_t *np;
 
 	for (nr = 0;; nr++) {
+		if (b + sizeof(reclen) > eb)
+			break;
 		memcpy(&reclen, b, sizeof(reclen));
 		reclen = CDF_TOLE2(reclen);
 		if (reclen == 0)

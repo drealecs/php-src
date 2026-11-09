@@ -50,6 +50,28 @@ PHP_FUNCTION(dl_test_test2)
 }
 /* }}}*/
 
+PHP_FUNCTION(dl_test_frameless)
+{
+	zend_long value;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_LONG(value)
+	ZEND_PARSE_PARAMETERS_END();
+
+	RETURN_LONG(value);
+}
+
+ZEND_FRAMELESS_FUNCTION(dl_test_frameless, 1)
+{
+	zend_long value;
+
+	Z_FLF_PARAM_LONG(1, value);
+
+	RETVAL_LONG(value);
+
+flf_clean:;
+}
+
 /* {{{ PHP_DL_TEST_USE_REGISTER_FUNCTIONS_DIRECTLY */
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_dl_test_use_register_functions_directly, 0, 0, IS_STRING, 0)
 ZEND_END_ARG_INFO()
@@ -102,7 +124,8 @@ PHP_MINIT_FUNCTION(dl_test)
 {
 	zend_class_entry *ce;
 
-	register_class_DlTest();
+	ce = register_class_DlTest();
+	zend_register_class_alias("DlTestAlias", ce);
 	ce = register_class_DlTestSuperClass();
 	register_class_DlTestSubClass(ce);
 	register_class_DlTestAliasedClass();

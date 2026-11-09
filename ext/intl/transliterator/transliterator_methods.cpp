@@ -22,12 +22,12 @@
 #endif
 
 #include <unicode/uenum.h>
+#include <unicode/translit.h>
+#include "../intl_convertcpp.h"
 
-extern "C" {
 #include "php_intl.h"
 #include "intl_data.h"
 #include "intl_convert.h"
-}
 #include "transliterator.h"
 #include "transliterator_class.h"
 
@@ -222,16 +222,41 @@ U_CFUNC PHP_FUNCTION( transliterator_create_inverse )
 }
 /* }}} */
 
+/* {{{ Export the rules used to recreate a transliterator. */
+U_CFUNC PHP_FUNCTION( transliterator_to_rules )
+{
+	bool escape_unprintable = false;
+	TRANSLITERATOR_METHOD_INIT_VARS;
+
+	if (zend_parse_method_parameters(ZEND_NUM_ARGS(), getThis(), "O|b",
+			&object, Transliterator_ce_ptr, &escape_unprintable) == FAILURE) {
+		RETURN_THROWS();
+	}
+
+	TRANSLITERATOR_METHOD_FETCH_OBJECT;
+
+	UnicodeString rules;
+	reinterpret_cast<const icu::Transliterator *>(to->utrans)->toRules(rules, escape_unprintable);
+
+	zend_string *u8str = intl_charFromString(rules, TRANSLITERATOR_ERROR_CODE_P(to));
+	if (!u8str) {
+		if (U_SUCCESS(TRANSLITERATOR_ERROR_CODE(to))) {
+			TRANSLITERATOR_ERROR_CODE(to) = U_MEMORY_ALLOCATION_ERROR;
+		}
+		INTL_METHOD_CHECK_STATUS(to, "Failed to export transliterator rules");
+	}
+	RETURN_STR(u8str);
+}
+/* }}} */
+
 /* {{{ Return an array with the registered transliterator IDs. */
-U_CFUNC PHP_FUNCTION( transliterator_list_ids )
+PHP_INTL_FUNCTION_WITH_ERROR_RESET(transliterator_list_ids)
 {
 	UEnumeration  *en;
 	const UChar	  *elem;
 	int32_t		  elem_len;
 	int32_t		  count;
 	UErrorCode	  status = U_ZERO_ERROR;
-
-	intl_error_reset( nullptr );
 
 	ZEND_PARSE_PARAMETERS_NONE();
 

@@ -85,7 +85,7 @@
 */
 
 #define N             624                 /* length of state vector */
-ZEND_STATIC_ASSERT(
+static_assert(
 	N == sizeof(((php_random_status_state_mt19937*)0)->state) / sizeof(((php_random_status_state_mt19937*)0)->state[0]),
 	"Assumed length of Mt19937 state vector does not match actual size."
 );
@@ -348,30 +348,30 @@ PHP_METHOD(Random_Engine_Mt19937, __unserialize)
 
 	/* Verify the expected number of elements, this implicitly ensures that no additional elements are present. */
 	if (zend_hash_num_elements(d) != 2) {
-		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %s object", ZSTR_VAL(engine->std.ce->name));
+		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %pS object", engine->std.ce->name);
 		RETURN_THROWS();
 	}
 
 	/* members */
 	t = zend_hash_index_find(d, 0);
 	if (!t || Z_TYPE_P(t) != IS_ARRAY) {
-		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %s object", ZSTR_VAL(engine->std.ce->name));
+		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %pS object", engine->std.ce->name);
 		RETURN_THROWS();
 	}
 	object_properties_load(&engine->std, Z_ARRVAL_P(t));
 	if (EG(exception)) {
-		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %s object", ZSTR_VAL(engine->std.ce->name));
+		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %pS object", engine->std.ce->name);
 		RETURN_THROWS();
 	}
 
 	/* state */
 	t = zend_hash_index_find(d, 1);
 	if (!t || Z_TYPE_P(t) != IS_ARRAY) {
-		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %s object", ZSTR_VAL(engine->std.ce->name));
+		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %pS object", engine->std.ce->name);
 		RETURN_THROWS();
 	}
 	if (!engine->engine.algo->unserialize(engine->engine.state, Z_ARRVAL_P(t))) {
-		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %s object", ZSTR_VAL(engine->std.ce->name));
+		zend_throw_exception_ex(NULL, 0, "Invalid serialization data for %pS object", engine->std.ce->name);
 		RETURN_THROWS();
 	}
 }

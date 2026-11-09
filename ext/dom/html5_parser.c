@@ -37,21 +37,28 @@ typedef struct work_list_item {
     uintptr_t current_active_namespace;
     xmlNodePtr lxml_parent;
     xmlNsPtr lxml_ns;
+    bool in_template;
 } work_list_item;
 
-static void lexbor_libxml2_bridge_work_list_item_push(
+static bool lexbor_libxml2_bridge_work_list_item_push(
     lexbor_array_obj_t *array,
     lxb_dom_node_t *node,
     uintptr_t current_active_namespace,
     xmlNodePtr lxml_parent,
-    xmlNsPtr lxml_ns
+    xmlNsPtr lxml_ns,
+    bool in_template
 )
 {
     work_list_item *item = (work_list_item *) lexbor_array_obj_push_wo_cls(array);
+    if (UNEXPECTED(item == NULL)) {
+        return false;
+    }
     item->node = node;
     item->current_active_namespace = current_active_namespace;
     item->lxml_parent = lxml_parent;
     item->lxml_ns = lxml_ns;
+    item->in_template = in_template;
+    return true;
 }
 
 static unsigned short sanitize_line_nr(size_t line)
@@ -107,6 +114,7 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
     xmlNodePtr root,
     bool compact_text_nodes,
     bool create_default_ns,
+    bool in_template_contents,
     php_dom_private_data *private_data
 )
 {
@@ -119,16 +127,22 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
     xmlNsPtr prefixed_xmlns_ns = NULL;
 
     lexbor_array_obj_t work_list;
-    lexbor_array_obj_init(&work_list, WORK_LIST_INIT_SIZE, sizeof(work_list_item));
+    if (UNEXPECTED(lexbor_array_obj_init(&work_list, WORK_LIST_INIT_SIZE, sizeof(work_list_item)) != LXB_STATUS_OK)) {
+        return LEXBOR_LIBXML2_BRIDGE_STATUS_OOM;
+    }
 
     for (lxb_dom_node_t *node = start_node; node != NULL; node = node->prev) {
-        lexbor_libxml2_bridge_work_list_item_push(&work_list, node, LXB_NS__UNDEF, root, NULL);
+        if (UNEXPECTED(!lexbor_libxml2_bridge_work_list_item_push(&work_list, node, LXB_NS__UNDEF, root, NULL, in_template_contents))) {
+            lexbor_array_obj_destroy(&work_list, false);
+            return LEXBOR_LIBXML2_BRIDGE_STATUS_OOM;
+        }
     }
 
     work_list_item *current_stack_item;
     while ((current_stack_item = lexbor_array_obj_pop(&work_list)) != NULL) {
         lxb_dom_node_t *node = current_stack_item->node;
         xmlNodePtr lxml_parent = current_stack_item->lxml_parent;
+        bool in_template = current_stack_item->in_template;
 
         /* CDATA section and processing instructions don't occur in parsed HTML documents.
          * The historical types are not emitted by the parser either. */
@@ -171,7 +185,9 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
 			 * Other types of nodes contain their children directly. */
 			xmlNodePtr lxml_child_parent = lxml_element;
 			lxb_dom_node_t *child_node = element->node.last_child;
+			bool child_in_template = in_template;
 			if (lxb_html_tree_node_is(&element->node, LXB_TAG_TEMPLATE)) {
+				child_in_template = true;
 				if (create_default_ns) {
 					lxml_child_parent = xmlNewDocFragment(lxml_doc);
 					if (UNEXPECTED(lxml_child_parent == NULL)) {
@@ -191,13 +207,20 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
 			}
 
             for (; child_node != NULL; child_node = child_node->prev) {
-                lexbor_libxml2_bridge_work_list_item_push(
+                if (UNEXPECTED(!lexbor_libxml2_bridge_work_list_item_push(
                     &work_list,
                     child_node,
                     entering_namespace,
                     lxml_child_parent,
-                    current_lxml_ns
-                );
+                    current_lxml_ns,
+                    child_in_template
+                ))) {
+                    retval = LEXBOR_LIBXML2_BRIDGE_STATUS_OOM;
+                    break;
+                }
+            }
+            if (UNEXPECTED(retval != LEXBOR_LIBXML2_BRIDGE_STATUS_OK)) {
+                break;
             }
 
             xmlAttrPtr last_added_attr = NULL;
@@ -239,7 +262,7 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
                 lxml_attr->children = lxml_attr->last = lxml_text;
                 lxml_text->parent = (xmlNodePtr) lxml_attr;
 
-                if (attr->node.ns == LXB_NS_XMLNS) {
+                if (attr->node.ns == LXB_NS_XMLNS && (attr->node.prefix || strcmp((const char *) local_name, "xmlns") == 0)) {
                     if (strcmp((const char *) local_name, "xmlns") != 0) {
                         if (prefixed_xmlns_ns == NULL) {
                             prefixed_xmlns_ns = php_dom_libxml_ns_mapper_get_ns_raw_strings_nullsafe(ns_mapper, "xmlns", DOM_XMLNS_NS_URI);
@@ -249,13 +272,13 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
                         lxml_attr->ns = php_dom_libxml_ns_mapper_ensure_prefixless_xmlns_ns(ns_mapper);
                     }
                     lxml_attr->ns->_private = (void *) php_dom_ns_is_xmlns_magic_token;
-                } else if (attr->node.ns == LXB_NS_XLINK) {
+                } else if (attr->node.prefix && attr->node.ns == LXB_NS_XLINK) {
                     if (xlink_ns == NULL) {
                         xlink_ns = php_dom_libxml_ns_mapper_get_ns_raw_strings_nullsafe(ns_mapper, "xlink", DOM_XLINK_NS_URI);
                         xlink_ns->_private = (void *) php_dom_ns_is_xlink_magic_token;
                     }
                     lxml_attr->ns = xlink_ns;
-                } else if (attr->node.ns == LXB_NS_XML) {
+                } else if (attr->node.prefix && attr->node.ns == LXB_NS_XML) {
                     if (xml_ns == NULL) {
                         xml_ns = php_dom_libxml_ns_mapper_get_ns_raw_strings_nullsafe(ns_mapper, "xml", DOM_XML_NS_URI);
                         xml_ns->_private = (void *) php_dom_ns_is_xml_magic_token;
@@ -272,8 +295,8 @@ static lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert(
                 last_added_attr = lxml_attr;
 
                 /* xmlIsID does some other stuff too that is irrelevant here. */
-                if (local_name_length == 2 && local_name[0] == 'i' && local_name[1] == 'd' && attr->node.ns == LXB_NS_HTML) {
-                    if (xmlAddID(NULL, lxml_doc, value, lxml_attr) == 0) {
+                if (local_name_length == 2 && local_name[0] == 'i' && local_name[1] == 'd' && lxml_attr->ns == NULL) {
+                    if (in_template || xmlAddID(NULL, lxml_doc, value, lxml_attr) == 0) {
                         /* If the ID already exists, the ID attribute still needs to be marked as an ID. */
                         lxml_attr->atype = XML_ATTRIBUTE_ID;
                     }
@@ -367,9 +390,11 @@ lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert_document(
         (xmlNodePtr) lxml_doc,
         compact_text_nodes,
         create_default_ns,
+        false,
         private_data
     );
     if (status != LEXBOR_LIBXML2_BRIDGE_STATUS_OK) {
+        php_dom_remove_templated_content_in_subtree(private_data, (xmlNodePtr) lxml_doc);
         xmlFreeDoc(lxml_doc);
         return status;
     }
@@ -383,6 +408,7 @@ lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert_fragment(
     xmlNodePtr *fragment_out,
     bool compact_text_nodes,
     bool create_default_ns,
+    bool in_template_contents,
 	php_dom_private_data *private_data
 )
 {
@@ -396,9 +422,11 @@ lexbor_libxml2_bridge_status lexbor_libxml2_bridge_convert_fragment(
         fragment,
         compact_text_nodes,
         create_default_ns,
+        in_template_contents,
         private_data
     );
     if (status != LEXBOR_LIBXML2_BRIDGE_STATUS_OK) {
+        php_dom_remove_templated_content_in_subtree(private_data, fragment);
         xmlFreeNode(fragment);
         return status;
     }

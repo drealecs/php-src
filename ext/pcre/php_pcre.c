@@ -76,7 +76,7 @@ ZEND_TLS pcre2_compile_context *cctx = NULL;
 ZEND_TLS pcre2_match_context   *mctx = NULL;
 ZEND_TLS pcre2_match_data      *mdata = NULL;
 ZEND_TLS bool              mdata_used = 0;
-ZEND_TLS uint8_t pcre2_init_ok = 0;
+ZEND_TLS bool pcre2_init_ok = false;
 #if defined(ZTS) && defined(HAVE_PCRE_JIT_SUPPORT)
 static MUTEX_T pcre_mt = NULL;
 #define php_pcre_mutex_alloc() \
@@ -104,7 +104,7 @@ static void php_pcre_free_char_table(zval *data)
 
 static void pcre_handle_exec_error(int pcre_code) /* {{{ */
 {
-	int preg_code = 0;
+	php_pcre_error_code preg_code = PHP_PCRE_NO_ERROR;
 
 	switch (pcre_code) {
 		case PCRE2_ERROR_MATCHLIMIT:
@@ -189,7 +189,7 @@ static void php_pcre_free(void *block, void *data)
 
 static void *php_pcre_emalloc(PCRE2_SIZE size, void *data)
 {
-	return emalloc(size);
+	return femalloc(size, /* fallible */ true);
 }
 
 static void php_pcre_efree(void *block, void *data)
@@ -204,7 +204,7 @@ static void php_pcre_init_pcre2(uint8_t jit)
 	if (!gctx) {
 		gctx = pcre2_general_context_create(php_pcre_malloc, php_pcre_free, NULL);
 		if (!gctx) {
-			pcre2_init_ok = 0;
+			pcre2_init_ok = false;
 			return;
 		}
 	}
@@ -212,7 +212,7 @@ static void php_pcre_init_pcre2(uint8_t jit)
 	if (!cctx) {
 		cctx = pcre2_compile_context_create(gctx);
 		if (!cctx) {
-			pcre2_init_ok = 0;
+			pcre2_init_ok = false;
 			return;
 		}
 	}
@@ -220,7 +220,7 @@ static void php_pcre_init_pcre2(uint8_t jit)
 	if (!mctx) {
 		mctx = pcre2_match_context_create(gctx);
 		if (!mctx) {
-			pcre2_init_ok = 0;
+			pcre2_init_ok = false;
 			return;
 		}
 	}
@@ -229,7 +229,7 @@ static void php_pcre_init_pcre2(uint8_t jit)
 	if (jit && !jit_stack) {
 		jit_stack = pcre2_jit_stack_create(PCRE_JIT_STACK_MIN_SIZE, PCRE_JIT_STACK_MAX_SIZE, gctx);
 		if (!jit_stack) {
-			pcre2_init_ok = 0;
+			pcre2_init_ok = false;
 			return;
 		}
 	}
@@ -238,12 +238,12 @@ static void php_pcre_init_pcre2(uint8_t jit)
 	if (!mdata) {
 		mdata = pcre2_match_data_create(PHP_PCRE_PREALLOC_MDATA_SIZE, gctx);
 		if (!mdata) {
-			pcre2_init_ok = 0;
+			pcre2_init_ok = false;
 			return;
 		}
 	}
 
-	pcre2_init_ok = 1;
+	pcre2_init_ok = true;
 }/*}}}*/
 
 static void php_pcre_shutdown_pcre2(void)
@@ -277,7 +277,7 @@ static void php_pcre_shutdown_pcre2(void)
 		mdata = NULL;
 	}
 
-	pcre2_init_ok = 0;
+	pcre2_init_ok = false;
 }/*}}}*/
 
 static PHP_GINIT_FUNCTION(pcre) /* {{{ */
@@ -517,7 +517,7 @@ static void free_subpats_table(zend_string **subpat_names, uint32_t num_subpats)
 }
 
 /* {{{ static make_subpats_table */
-static zend_string **make_subpats_table(uint32_t name_cnt, pcre_cache_entry *pce)
+static zend_string **make_subpats_table(uint32_t name_cnt, const pcre_cache_entry *pce)
 {
 	uint32_t num_subpats = pce->capture_count + 1;
 	uint32_t name_size, ni = 0;
@@ -553,7 +553,7 @@ static zend_string **ensure_subpats_table(uint32_t name_cnt, pcre_cache_entry *p
 
 /* {{{ static calculate_unit_length */
 /* Calculates the byte length of the next character. Assumes valid UTF-8 for PCRE2_UTF. */
-static zend_always_inline size_t calculate_unit_length(pcre_cache_entry *pce, const char *start)
+static zend_always_inline size_t calculate_unit_length(const pcre_cache_entry *pce, const char *start)
 {
 	size_t unit_len;
 
@@ -723,6 +723,8 @@ PHPAPI pcre_cache_entry* pcre_get_compiled_regex_cache_ex(zend_string *regex, bo
 #ifdef PCRE2_UCP
 						coptions |= PCRE2_UCP;
 #endif
+						/* The \C escape sequence is unsafe in PCRE2_UTF mode */
+						coptions |= PCRE2_NEVER_BACKSLASH_C;
 				break;
 			case 'J':	coptions |= PCRE2_DUPNAMES;		break;
 
@@ -778,8 +780,13 @@ PHPAPI pcre_cache_entry* pcre_get_compiled_regex_cache_ex(zend_string *regex, bo
 		if (key != regex) {
 			zend_string_release_ex(key, 0);
 		}
-		pcre2_get_error_message(errnumber, error, sizeof(error));
-		php_error_docref(NULL,E_WARNING, "Compilation failed: %s at offset %zu", error, erroffset);
+		const char *err_msg = (const char*) error;
+		if (errnumber == PCRE2_ERROR_BACKSLASH_C_CALLER_DISABLED) {
+			err_msg = "using \\C is incompatible with the 'u' modifier";
+		} else {
+			pcre2_get_error_message(errnumber, error, sizeof(error));
+		}
+		php_error_docref(NULL,E_WARNING, "Compilation failed: %s at offset %zu", err_msg, erroffset);
 		pcre_handle_exec_error(PCRE2_ERROR_INTERNAL);
 		efree(pattern);
 		return NULL;
@@ -1013,7 +1020,7 @@ static inline void add_offset_pair(
 }
 /* }}} */
 
-static void populate_subpat_array(
+static zend_result populate_subpat_array(
 		HashTable *subpats_ht, const char *subject, PCRE2_SIZE *offsets, zend_string **subpat_names,
 		uint32_t num_subpats, int count, const PCRE2_SPTR mark, zend_long flags) {
 	zend_long offset_capture = flags & PREG_OFFSET_CAPTURE;
@@ -1026,10 +1033,16 @@ static void populate_subpat_array(
 				add_offset_pair(
 					subpats_ht, subject, offsets[2*i], offsets[2*i+1],
 					subpat_names[i], unmatched_as_null);
+				if (ZEND_HAS_OOM()) {
+					return FAILURE;
+				}
 			}
 			if (unmatched_as_null) {
 				for (i = count; i < num_subpats; i++) {
 					add_offset_pair(subpats_ht, NULL, PCRE2_UNSET, PCRE2_UNSET, subpat_names[i], 1);
+					if (ZEND_HAS_OOM()) {
+						return FAILURE;
+					}
 				}
 			}
 		} else {
@@ -1040,6 +1053,9 @@ static void populate_subpat_array(
 					add_named(subpats_ht, subpat_names[i], &val, offsets[2*i] == PCRE2_UNSET);
 				}
 				zend_hash_next_index_insert_new(subpats_ht, &val);
+				if (ZEND_HAS_OOM()) {
+					return FAILURE;
+				}
 			}
 			if (unmatched_as_null) {
 				for (i = count; i < num_subpats; i++) {
@@ -1048,6 +1064,9 @@ static void populate_subpat_array(
 						zend_hash_add(subpats_ht, subpat_names[i], &val);
 					}
 					zend_hash_next_index_insert_new(subpats_ht, &val);
+					if (ZEND_HAS_OOM()) {
+						return FAILURE;
+					}
 				}
 			}
 		}
@@ -1056,10 +1075,16 @@ static void populate_subpat_array(
 			for (i = 0; i < count; i++) {
 				add_offset_pair(
 					subpats_ht, subject, offsets[2*i], offsets[2*i+1], NULL, unmatched_as_null);
+				if (ZEND_HAS_OOM()) {
+					return FAILURE;
+				}
 			}
 			if (unmatched_as_null) {
 				for (i = count; i < num_subpats; i++) {
 					add_offset_pair(subpats_ht, NULL, PCRE2_UNSET, PCRE2_UNSET, NULL, 1);
+					if (ZEND_HAS_OOM()) {
+						return FAILURE;
+					}
 				}
 			}
 		} else {
@@ -1067,11 +1092,17 @@ static void populate_subpat_array(
 				populate_match_value(
 					&val, subject, offsets[2*i], offsets[2*i+1], unmatched_as_null);
 				zend_hash_next_index_insert_new(subpats_ht, &val);
+				if (ZEND_HAS_OOM()) {
+					return FAILURE;
+				}
 			}
 			if (unmatched_as_null) {
 				ZVAL_NULL(&val);
 				for (i = count; i < num_subpats; i++) {
 					zend_hash_next_index_insert_new(subpats_ht, &val);
+					if (ZEND_HAS_OOM()) {
+						return FAILURE;
+					}
 				}
 			}
 		}
@@ -1081,6 +1112,7 @@ static void populate_subpat_array(
 		ZVAL_STRING(&val, (char *)mark);
 		zend_hash_str_update(subpats_ht, ZEND_STRL("MARK"), &val);
 	}
+	return ZEND_HAS_OOM() ? FAILURE : SUCCESS;
 }
 
 static void php_do_pcre_match(INTERNAL_FUNCTION_PARAMETERS, bool global) /* {{{ */
@@ -1120,7 +1152,7 @@ static void php_do_pcre_match(INTERNAL_FUNCTION_PARAMETERS, bool global) /* {{{ 
 /* }}} */
 
 static zend_always_inline bool is_known_valid_utf8(
-		zend_string *subject_str, PCRE2_SIZE start_offset) {
+		const zend_string *subject_str, PCRE2_SIZE start_offset) {
 	if (!ZSTR_IS_VALID_UTF8(subject_str)) {
 		/* We don't know whether the string is valid UTF-8 or not. */
 		return false;
@@ -1148,7 +1180,6 @@ PHPAPI void php_pcre_match_impl(pcre_cache_entry *pce, zend_string *subject_str,
 	uint32_t		 num_subpats;		/* Number of captured subpatterns */
 	int				 matched;			/* Has anything matched */
 	zend_string	   **subpat_names;		/* Array for named subpatterns */
-	size_t			 i;
 	uint32_t		 subpats_order;		/* Order of subpattern matches */
 	uint32_t		 offset_capture;	/* Capture match offsets: yes/no */
 	zend_long		 unmatched_as_null;	/* Null non-matches: yes/no */
@@ -1241,7 +1272,7 @@ PHPAPI void php_pcre_match_impl(pcre_cache_entry *pce, zend_string *subject_str,
 	/* Allocate match sets array and initialize the values. */
 	if (global && subpats && subpats_order == PREG_PATTERN_ORDER) {
 		match_sets = safe_emalloc(num_subpats, sizeof(HashTable *), 0);
-		for (i=0; i<num_subpats; i++) {
+		for (uint32_t i = 0; i < num_subpats; i++) {
 			match_sets[i] = zend_new_array(0);
 		}
 	}
@@ -1265,6 +1296,10 @@ PHPAPI void php_pcre_match_impl(pcre_cache_entry *pce, zend_string *subject_str,
 			options, match_data, mctx);
 
 	while (1) {
+		if (ZEND_HAS_OOM()) {
+			goto oom;
+		}
+
 		/* If something has matched */
 		if (count >= 0) {
 			/* Check for too many substrings condition. */
@@ -1281,7 +1316,7 @@ matched:
 				/* Try to get the list of substrings and display a warning if failed. */
 				if (UNEXPECTED(offsets[1] < offsets[0])) {
 					if (match_sets) {
-						for (i = 0; i < num_subpats; i++) {
+						for (uint32_t i = 0; i < num_subpats; i++) {
 							zend_array_destroy(match_sets[i]);
 						}
 						efree(match_sets);
@@ -1300,17 +1335,23 @@ matched:
 					if (subpats_order == PREG_PATTERN_ORDER) {
 						/* For each subpattern, insert it into the appropriate array. */
 						if (offset_capture) {
-							for (i = 0; i < count; i++) {
+							for (int i = 0; i < count; i++) {
 								add_offset_pair(
 									match_sets[i], subject, offsets[2*i], offsets[2*i+1],
 									NULL, unmatched_as_null);
+								if (ZEND_HAS_OOM()) {
+									goto oom;
+								}
 							}
 						} else {
-							for (i = 0; i < count; i++) {
+							for (int i = 0; i < count; i++) {
 								zval val;
 								populate_match_value(
 									&val, subject, offsets[2*i], offsets[2*i+1], unmatched_as_null);
 								zend_hash_next_index_insert_new(match_sets[i], &val);
+								if (ZEND_HAS_OOM()) {
+									goto oom;
+								}
 							}
 						}
 						mark = pcre2_get_mark(match_data);
@@ -1343,23 +1384,33 @@ matched:
 									ZVAL_EMPTY_STRING(&tmp);
 									zend_hash_next_index_insert_new(match_sets[i], &tmp);
 								}
+								if (ZEND_HAS_OOM()) {
+									goto oom;
+								}
 							}
 						}
 					} else {
 						/* Allocate and populate the result set array */
 						mark = pcre2_get_mark(match_data);
 						array_init_size(&result_set, count + (mark ? 1 : 0));
-						populate_subpat_array(
+						zend_result result = populate_subpat_array(
 							Z_ARRVAL(result_set), subject, offsets, subpat_names,
 							num_subpats, count, mark, flags);
+						if (UNEXPECTED(result == FAILURE)) {
+							zval_ptr_dtor(&result_set);
+							goto oom;
+						}
 						/* And add it to the output array */
 						zend_hash_next_index_insert_new(Z_ARRVAL_P(subpats), &result_set);
 					}
 				} else {			/* single pattern matching */
 					/* For each subpattern, insert it into the subpatterns array. */
 					mark = pcre2_get_mark(match_data);
-					populate_subpat_array(
+					zend_result result = populate_subpat_array(
 						Z_ARRVAL_P(subpats), subject, offsets, subpat_names, num_subpats, count, mark, flags);
+					if (UNEXPECTED(result == FAILURE)) {
+						goto oom;
+					}
 					break;
 				}
 			}
@@ -1430,7 +1481,7 @@ error:
 	/* Add the match sets to the output array and clean up */
 	if (match_sets) {
 		if (subpat_names) {
-			for (i = 0; i < num_subpats; i++) {
+			for (uint32_t i = 0; i < num_subpats; i++) {
 				zval wrapper;
 				ZVAL_ARR(&wrapper, match_sets[i]);
 				if (subpat_names[i]) {
@@ -1440,7 +1491,7 @@ error:
 				zend_hash_next_index_insert_new(Z_ARRVAL_P(subpats), &wrapper);
 			}
 		} else {
-			for (i = 0; i < num_subpats; i++) {
+			for (uint32_t i = 0; i < num_subpats; i++) {
 				zval wrapper;
 				ZVAL_ARR(&wrapper, match_sets[i]);
 				zend_hash_next_index_insert_new(Z_ARRVAL_P(subpats), &wrapper);
@@ -1466,6 +1517,25 @@ error:
 	} else {
 		RETVAL_FALSE;
 	}
+	return;
+
+oom:
+	if (match_data != mdata) {
+		pcre2_match_data_free(match_data);
+	}
+	if (match_sets) {
+		for (uint32_t i = 0; i < num_subpats; i++) {
+			zend_array_destroy(match_sets[i]);
+		}
+		efree(match_sets);
+	}
+	if (marks) {
+		zend_array_destroy(marks);
+	}
+	if (subpats) {
+		zend_hash_clean(Z_ARRVAL_P(subpats));
+	}
+	RETURN_OOM();
 }
 /* }}} */
 
@@ -1508,17 +1578,17 @@ PHP_FUNCTION(preg_match_all)
 }
 /* }}} */
 
-/* {{{ preg_get_backref */
-static int preg_get_backref(char **str, int *backref)
+static bool preg_get_backref(char **str, int *backref)
 {
-	char in_brace = 0;
+	bool in_brace = false;
 	char *walk = *str;
 
-	if (walk[1] == 0)
-		return 0;
+	if (walk[1] == 0) {
+		return false;
+	}
 
 	if (*walk == '$' && walk[1] == '{') {
-		in_brace = 1;
+		in_brace = true;
 		walk++;
 	}
 	walk++;
@@ -1526,8 +1596,9 @@ static int preg_get_backref(char **str, int *backref)
 	if (*walk >= '0' && *walk <= '9') {
 		*backref = *walk - '0';
 		walk++;
-	} else
-		return 0;
+	} else {
+		return false;
+	}
 
 	if (*walk && *walk >= '0' && *walk <= '9') {
 		*backref = *backref * 10 + *walk - '0';
@@ -1535,32 +1606,31 @@ static int preg_get_backref(char **str, int *backref)
 	}
 
 	if (in_brace) {
-		if (*walk != '}')
-			return 0;
-		else
-			walk++;
+		if (*walk != '}') {
+			return false;
+		}
+		walk++;
 	}
 
 	*str = walk;
-	return 1;
+	return true;
 }
-/* }}} */
 
 /* Return NULL if an exception has occurred */
-static zend_string *preg_do_repl_func(zend_fcall_info *fci, zend_fcall_info_cache *fcc, const char *subject, PCRE2_SIZE *offsets, zend_string **subpat_names, uint32_t num_subpats, int count, const PCRE2_SPTR mark, zend_long flags)
+static zend_string *preg_do_repl_func(zend_fcall_info_cache *fcc, const zend_string *subject, PCRE2_SIZE *offsets, zend_string **subpat_names, uint32_t num_subpats, int count, const PCRE2_SPTR mark, zend_long flags)
 {
 	zend_string *result_str = NULL;
 	zval		 retval;			/* Function return value */
 	zval	     arg;				/* Argument to pass to function */
 
 	array_init_size(&arg, count + (mark ? 1 : 0));
-	populate_subpat_array(Z_ARRVAL(arg), subject, offsets, subpat_names, num_subpats, count, mark, flags);
+	zend_result result = populate_subpat_array(Z_ARRVAL(arg), ZSTR_VAL(subject), offsets, subpat_names, num_subpats, count, mark, flags);
+	if (UNEXPECTED(result == FAILURE)) {
+		zval_ptr_dtor(&arg);
+		return NULL;
+	}
 
-	fci->retval = &retval;
-	fci->param_count = 1;
-	fci->params = &arg;
-	fci->consumed_args = zend_fci_consumed_arg(0);
-	zend_call_function(fci, fcc);
+	zend_call_known_fcc_ex(fcc, &retval, 1, &arg, NULL, zend_fci_consumed_arg(0));
 	zval_ptr_dtor(&arg);
 	if (EXPECTED(Z_TYPE(retval) == IS_STRING)) {
 		return Z_STR(retval);
@@ -1603,7 +1673,7 @@ PHPAPI zend_string *php_pcre_replace(zend_string *regex,
 /* }}} */
 
 /* {{{ php_pcre_replace_impl() */
-PHPAPI zend_string *php_pcre_replace_impl(pcre_cache_entry *pce, zend_string *subject_str, const char *subject, size_t subject_len, zend_string *replace_str, size_t limit, size_t *replace_count)
+PHPAPI zend_string *php_pcre_replace_impl(const pcre_cache_entry *pce, zend_string *subject_str, const char *subject, size_t subject_len, zend_string *replace_str, size_t limit, size_t *replace_count)
 {
 	uint32_t		 options;			/* Execution options */
 	int				 count;				/* Count of matched subpatterns */
@@ -1721,9 +1791,18 @@ matched:
 			if (new_len >= alloc_len) {
 				alloc_len = zend_safe_address_guarded(2, new_len, ZSTR_MAX_OVERHEAD) - ZSTR_MAX_OVERHEAD;
 				if (result == NULL) {
-					result = zend_string_alloc(alloc_len, 0);
+					result = zend_string_falloc(alloc_len, /* persistent */ false, /* fallible */ true);
+					if (!result) {
+						goto error;
+					}
 				} else {
-					result = zend_string_extend(result, alloc_len, 0);
+					zend_string *extended_result = zend_string_fextend(result, alloc_len, /* persistent */ false, /* fallible */ true);
+					if (!extended_result) {
+						zend_string_release(result);
+						result = NULL;
+						goto error;
+					}
+					result = extended_result;
 				}
 			}
 
@@ -1848,7 +1927,7 @@ error:
 /* }}} */
 
 static zend_string *php_pcre_replace_func_impl(pcre_cache_entry *pce, zend_string *subject_str,
-	zend_fcall_info *fci, zend_fcall_info_cache *fcc,
+	zend_fcall_info_cache *fcc,
 	size_t limit, size_t *replace_count, zend_long flags
 ) {
 	uint32_t		 options;			/* Execution options */
@@ -1946,19 +2025,30 @@ matched:
 
 			/* Use custom function to get replacement string and its length. */
 			zend_string *eval_result = preg_do_repl_func(
-				fci, fcc, ZSTR_VAL(subject_str), offsets, subpat_names, num_subpats, count,
+				fcc, subject_str, offsets, subpat_names, num_subpats, count,
 				pcre2_get_mark(match_data), flags);
 
-			if (UNEXPECTED(eval_result == NULL)) {
+			if (UNEXPECTED(!eval_result)) {
 				goto error;
 			}
 			new_len = zend_safe_address_guarded(1, ZSTR_LEN(eval_result) + ZSTR_MAX_OVERHEAD, new_len) -ZSTR_MAX_OVERHEAD;
 			if (new_len >= alloc_len) {
 				alloc_len = zend_safe_address_guarded(2, new_len, ZSTR_MAX_OVERHEAD) - ZSTR_MAX_OVERHEAD;
 				if (result == NULL) {
-					result = zend_string_alloc(alloc_len, 0);
+					result = zend_string_falloc(alloc_len, /* persistent */ false, /* fallible */ true);
+					if (!result) {
+						zend_string_release_ex(eval_result, 0);
+						goto error;
+					}
 				} else {
-					result = zend_string_extend(result, alloc_len, 0);
+					zend_string *extended_result = zend_string_fextend(result, alloc_len, /* persistent */ false, /* fallible */ true);
+					if (!extended_result) {
+						zend_string_release_ex(eval_result, 0);
+						zend_string_release(result);
+						result = NULL;
+						goto error;
+					}
+					result = extended_result;
 				}
 			}
 
@@ -2049,7 +2139,7 @@ error:
 
 static zend_always_inline zend_string *php_pcre_replace_func(zend_string *regex,
 							  zend_string *subject_str,
-							  zend_fcall_info *fci, zend_fcall_info_cache *fcc,
+							  zend_fcall_info_cache *fcc,
 							  size_t limit, size_t *replace_count, zend_long flags)
 {
 	pcre_cache_entry	*pce;			    /* Compiled regular expression */
@@ -2060,15 +2150,15 @@ static zend_always_inline zend_string *php_pcre_replace_func(zend_string *regex,
 		return NULL;
 	}
 	pce->refcount++;
-	result = php_pcre_replace_func_impl(pce, subject_str, fci, fcc, limit, replace_count, flags);
+	result = php_pcre_replace_func_impl(pce, subject_str, fcc, limit, replace_count, flags);
 	pce->refcount--;
 
 	return result;
 }
 
 /* {{{ php_pcre_replace_array */
-static zend_string *php_pcre_replace_array(HashTable *regex,
-	zend_string *replace_str, HashTable *replace_ht,
+static zend_string *php_pcre_replace_array(const HashTable *regex,
+	zend_string *replace_str, const HashTable *replace_ht,
 	zend_string *subject_str, size_t limit, size_t *replace_count)
 {
 	zval		*regex_entry;
@@ -2085,7 +2175,6 @@ static zend_string *php_pcre_replace_array(HashTable *regex,
 			zend_string *tmp_regex_str;
 			zend_string *regex_str = zval_get_tmp_string(regex_entry, &tmp_regex_str);
 			zend_string *replace_entry_str, *tmp_replace_entry_str;
-			zval *zv;
 
 			/* Get current entry */
 			while (1) {
@@ -2094,7 +2183,7 @@ static zend_string *php_pcre_replace_array(HashTable *regex,
 					tmp_replace_entry_str = NULL;
 					break;
 				}
-				zv = ZEND_HASH_ELEMENT(replace_ht, replace_idx);
+				const zval *zv = ZEND_HASH_ELEMENT(replace_ht, replace_idx);
 				replace_idx++;
 				if (Z_TYPE_P(zv) != IS_UNDEF) {
 					replace_entry_str = zval_get_tmp_string(zv, &tmp_replace_entry_str);
@@ -2144,8 +2233,8 @@ static zend_string *php_pcre_replace_array(HashTable *regex,
 
 /* {{{ php_replace_in_subject */
 static zend_always_inline zend_string *php_replace_in_subject(
-	zend_string *regex_str, HashTable *regex_ht,
-	zend_string *replace_str, HashTable *replace_ht,
+	zend_string *regex_str, const HashTable *regex_ht,
+	zend_string *replace_str, const HashTable *replace_ht,
 	zend_string *subject, size_t limit, size_t *replace_count)
 {
 	zend_string *result;
@@ -2164,24 +2253,23 @@ static zend_always_inline zend_string *php_replace_in_subject(
 /* }}} */
 
 static zend_string *php_replace_in_subject_func(zend_string *regex_str, const HashTable *regex_ht,
-	zend_fcall_info *fci, zend_fcall_info_cache *fcc,
+	zend_fcall_info_cache *fcc,
 	zend_string *subject, size_t limit, size_t *replace_count, zend_long flags)
 {
 	zend_string *result;
 
 	if (regex_str) {
-		result = php_pcre_replace_func(regex_str, subject, fci, fcc, limit, replace_count, flags);
+		result = php_pcre_replace_func(regex_str, subject, fcc, limit, replace_count, flags);
 		return result;
 	} else {
 		/* If regex is an array */
-		zval		*regex_entry;
 
 		ZEND_ASSERT(regex_ht != NULL);
 
 		zend_string_addref(subject);
 
 		/* For each entry in the regex array, get the entry */
-		ZEND_HASH_FOREACH_VAL(regex_ht, regex_entry) {
+		ZEND_HASH_FOREACH_VAL(regex_ht, zval *regex_entry) {
 			/* Make sure we're dealing with strings. */
 			zend_string *tmp_regex_entry_str;
 			zend_string *regex_entry_str = zval_try_get_tmp_string(regex_entry, &tmp_regex_entry_str);
@@ -2192,7 +2280,7 @@ static zend_string *php_replace_in_subject_func(zend_string *regex_str, const Ha
 			/* Do the actual replacement and put the result back into subject
 			   for further replacements. */
 			result = php_pcre_replace_func(
-				regex_entry_str, subject, fci, fcc, limit, replace_count, flags);
+				regex_entry_str, subject, fcc, limit, replace_count, flags);
 			zend_tmp_string_release(tmp_regex_entry_str);
 			zend_string_release(subject);
 			subject = result;
@@ -2207,7 +2295,7 @@ static zend_string *php_replace_in_subject_func(zend_string *regex_str, const Ha
 
 static size_t php_preg_replace_func_impl(zval *return_value,
 	zend_string *regex_str, const HashTable *regex_ht,
-	zend_fcall_info *fci, zend_fcall_info_cache *fcc,
+	zend_fcall_info_cache *fcc,
 	zend_string *subject_str, const HashTable *subject_ht, zend_long limit_val, zend_long flags)
 {
 	zend_string	*result;
@@ -2215,7 +2303,7 @@ static size_t php_preg_replace_func_impl(zval *return_value,
 
 	if (subject_str) {
 		result = php_replace_in_subject_func(
-			regex_str, regex_ht, fci, fcc, subject_str, limit_val, &replace_count, flags);
+			regex_str, regex_ht, fcc, subject_str, limit_val, &replace_count, flags);
 		if (result != NULL) {
 			RETVAL_STR(result);
 		} else {
@@ -2223,10 +2311,6 @@ static size_t php_preg_replace_func_impl(zval *return_value,
 		}
 	} else {
 		/* if subject is an array */
-		zval		*subject_entry, zv;
-		zend_string	*string_key;
-		zend_ulong	 num_key;
-
 		ZEND_ASSERT(subject_ht != NULL);
 
 		array_init_size(return_value, zend_hash_num_elements(subject_ht));
@@ -2234,7 +2318,7 @@ static size_t php_preg_replace_func_impl(zval *return_value,
 
 		/* For each subject entry, convert it to string, then perform replacement
 		   and add the result to the return_value array. */
-		ZEND_HASH_FOREACH_KEY_VAL(subject_ht, num_key, string_key, subject_entry) {
+		ZEND_HASH_FOREACH_KEY_VAL(subject_ht, zend_ulong num_key, zend_string *string_key, zval *subject_entry) {
 			zend_string *tmp_subject_entry_str;
 			zend_string *subject_entry_str = zval_try_get_tmp_string(subject_entry, &tmp_subject_entry_str);
 			if (UNEXPECTED(subject_entry_str == NULL)) {
@@ -2242,9 +2326,10 @@ static size_t php_preg_replace_func_impl(zval *return_value,
 			}
 
 			result = php_replace_in_subject_func(
-				regex_str, regex_ht, fci, fcc, subject_entry_str, limit_val, &replace_count, flags);
+				regex_str, regex_ht, fcc, subject_entry_str, limit_val, &replace_count, flags);
 			if (result != NULL) {
 				/* Add to return array */
+				zval zv;
 				ZVAL_STR(&zv, result);
 				if (string_key) {
 					zend_hash_add_new(return_value_ht, string_key, &zv);
@@ -2262,8 +2347,8 @@ static size_t php_preg_replace_func_impl(zval *return_value,
 static void _preg_replace_common(
 	zval *return_value,
 	HashTable *regex_ht, zend_string *regex_str,
-	HashTable *replace_ht, zend_string *replace_str,
-	HashTable *subject_ht, zend_string *subject_str,
+	const HashTable *replace_ht, zend_string *replace_str,
+	const HashTable *subject_ht, zend_string *subject_str,
 	zend_long limit,
 	zval *zcount,
 	bool is_filter
@@ -2294,10 +2379,6 @@ static void _preg_replace_common(
 		}
 	} else {
 		/* if subject is an array */
-		zval		*subject_entry, zv;
-		zend_string	*string_key;
-		zend_ulong	 num_key;
-
 		ZEND_ASSERT(subject_ht != NULL);
 
 		array_init_size(return_value, zend_hash_num_elements(subject_ht));
@@ -2305,7 +2386,7 @@ static void _preg_replace_common(
 
 		/* For each subject entry, convert it to string, then perform replacement
 		   and add the result to the return_value array. */
-		ZEND_HASH_FOREACH_KEY_VAL(subject_ht, num_key, string_key, subject_entry) {
+		ZEND_HASH_FOREACH_KEY_VAL(subject_ht, zend_ulong num_key, zend_string *string_key, zval *subject_entry) {
 			old_replace_count = replace_count;
 			zend_string *tmp_subject_entry_str;
 			zend_string *subject_entry_str = zval_get_tmp_string(subject_entry, &tmp_subject_entry_str);
@@ -2315,6 +2396,7 @@ static void _preg_replace_common(
 			if (result != NULL) {
 				if (!is_filter || replace_count > old_replace_count) {
 					/* Add to return array */
+					zval zv;
 					ZVAL_STR(&zv, result);
 					if (string_key) {
 						zend_hash_add_new(return_value_ht, string_key, &zv);
@@ -2407,29 +2489,32 @@ PHP_FUNCTION(preg_replace_callback)
 	/* Get function parameters and do error-checking. */
 	ZEND_PARSE_PARAMETERS_START(3, 6)
 		Z_PARAM_ARRAY_HT_OR_STR(regex_ht, regex_str)
-		Z_PARAM_FUNC(fci, fcc)
+		Z_PARAM_FUNC_NO_TRAMPOLINE_FREE(fci, fcc)
 		Z_PARAM_ARRAY_HT_OR_STR(subject_ht, subject_str)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_LONG(limit)
 		Z_PARAM_ZVAL(zcount)
 		Z_PARAM_LONG(flags)
-	ZEND_PARSE_PARAMETERS_END();
+	ZEND_PARSE_PARAMETERS_END_EX(goto free_trampoline);
 
 	replace_count = php_preg_replace_func_impl(return_value, regex_str, regex_ht,
-		&fci, &fcc,
+		&fcc,
 		subject_str, subject_ht, limit, flags);
 	if (zcount) {
 		ZEND_TRY_ASSIGN_REF_LONG(zcount, replace_count);
 	}
+
+free_trampoline:
+	zend_release_fcall_info_cache(&fcc);
 }
 /* }}} */
 
 /* {{{ Perform Perl-style regular expression replacement using replacement callback. */
 PHP_FUNCTION(preg_replace_callback_array)
 {
-	zval *replace, *zcount = NULL;
+	zval *zcount = NULL;
 	HashTable *pattern, *subject_ht;
-	zend_string *subject_str, *str_idx_regex;
+	zend_string *subject_str;
 	zend_long limit = -1, flags = 0;
 	size_t replace_count = 0;
 
@@ -2449,27 +2534,24 @@ PHP_FUNCTION(preg_replace_callback_array)
 		GC_TRY_ADDREF(subject_str);
 	}
 
-	ZEND_HASH_FOREACH_STR_KEY_VAL(pattern, str_idx_regex, replace) {
+	ZEND_HASH_FOREACH_STR_KEY_VAL(pattern, zend_string *str_idx_regex, zval *replace) {
 		if (!str_idx_regex) {
 			zend_argument_type_error(1, "must contain only string patterns as keys");
 			goto error;
 		}
 
 		zend_fcall_info_cache fcc = empty_fcall_info_cache;
-		zend_fcall_info fci = empty_fcall_info;
-		fci.size = sizeof(zend_fcall_info);
-		/* Copy potential trampoline */
-		ZVAL_COPY_VALUE(&fci.function_name, replace);
 
-		if (!zend_is_callable_ex(replace, NULL, 0, NULL, &fcc, NULL)) {
+		if (!zend_is_callable(replace, &fcc, NULL)) {
 			zend_argument_type_error(1, "must contain only valid callbacks");
 			goto error;
 		}
 
 		zval retval;
-		replace_count += php_preg_replace_func_impl(&retval, str_idx_regex, /* regex_ht */ NULL, &fci, &fcc,
+		zend_fcc_addref(&fcc);
+		replace_count += php_preg_replace_func_impl(&retval, str_idx_regex, /* regex_ht */ NULL, &fcc,
 			subject_str, subject_ht, limit, flags);
-		zend_release_fcall_info_cache(&fcc);
+		zend_fcc_dtor(&fcc);
 
 		switch (Z_TYPE(retval)) {
 			case IS_ARRAY:
@@ -2554,7 +2636,7 @@ PHP_FUNCTION(preg_split)
 /* }}} */
 
 /* {{{ php_pcre_split */
-PHPAPI void php_pcre_split_impl(pcre_cache_entry *pce, zend_string *subject_str, zval *return_value,
+PHPAPI void php_pcre_split_impl(const pcre_cache_entry *pce, zend_string *subject_str, zval *return_value,
 	zend_long limit_val, zend_long flags)
 {
 	uint32_t		 options;			/* Execution options */
@@ -2622,6 +2704,11 @@ PHPAPI void php_pcre_split_impl(pcre_cache_entry *pce, zend_string *subject_str,
 			options, match_data, mctx);
 
 	while (1) {
+		if (ZEND_HAS_OOM()) {
+			PCRE_G(error_code) = PHP_PCRE_INTERNAL_ERROR;
+			break;
+		}
+
 		/* If something matched */
 		if (count >= 0) {
 			/* Check for too many substrings condition. */
@@ -2915,14 +3002,11 @@ PHP_FUNCTION(preg_grep)
 }
 /* }}} */
 
-PHPAPI void  php_pcre_grep_impl(pcre_cache_entry *pce, zval *input, zval *return_value, zend_long flags) /* {{{ */
+PHPAPI void php_pcre_grep_impl(const pcre_cache_entry *pce, zval *input, zval *return_value, zend_long flags) /* {{{ */
 {
-	zval            *entry;             /* An entry in the input array */
 	uint32_t		 num_subpats;		/* Number of captured subpatterns */
 	int				 count;				/* Count of matched subpatterns */
 	uint32_t		 options;			/* Execution options */
-	zend_string		*string_key;
-	zend_ulong		 num_key;
 	bool		 invert;			/* Whether to return non-matching
 										   entries */
 	bool old_mdata_used;
@@ -2953,7 +3037,7 @@ PHPAPI void  php_pcre_grep_impl(pcre_cache_entry *pce, zval *input, zval *return
 	options = (pce->compile_options & PCRE2_UTF) ? 0 : PCRE2_NO_UTF_CHECK;
 
 	/* Go through the input array */
-	ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(input), num_key, string_key, entry) {
+	ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(input), zend_ulong num_key, zend_string *string_key, zval *entry) {
 		zend_string *tmp_subject_str;
 		zend_string *subject_str = zval_get_tmp_string(entry, &tmp_subject_str);
 

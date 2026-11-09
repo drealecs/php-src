@@ -26,7 +26,7 @@
 #define FILE_NAME "/tmp/fuzzer.php"
 #define MAX_STEPS 1000
 #define MAX_SIZE (8 * 1024)
-#define ZEND_VM_ENTER_BIT 1ULL
+#define ZEND_VM_ENTER_BIT ((uintptr_t)1)
 
 static uint32_t steps_left;
 static bool bailed_out = false;
@@ -145,4 +145,13 @@ ZEND_ATTRIBUTE_UNUSED static void opcache_invalidate(void) {
 	zval_ptr_dtor(&args[0]);
 	zval_ptr_dtor(&retval);
 	EG(exception) = exception;
+}
+
+ZEND_ATTRIBUTE_UNUSED static void set_jit_option(zend_string *jit_option, const char *value) {
+	if (zend_alter_ini_entry_chars(
+			jit_option, value, strlen(value), PHP_INI_USER, PHP_INI_STAGE_RUNTIME) == FAILURE) {
+		/* Fail loudly instead of silently fuzzing without the JIT. */
+		fprintf(stderr, "Failed to set opcache.jit=%s\n", value);
+		abort();
+	}
 }

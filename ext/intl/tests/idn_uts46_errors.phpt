@@ -2,11 +2,6 @@
 IDN UTS #46 API error tests
 --EXTENSIONS--
 intl
---SKIPIF--
-<?php
-    if (!defined('INTL_IDNA_VARIANT_UTS46'))
-        die('skip no UTS #46 API');
-?>
 --FILE--
 <?php
 echo "=> PHP level errors", "\n";
@@ -14,6 +9,13 @@ echo "=> PHP level errors", "\n";
 echo "bad variant:", "\n";
 try {
     var_dump(idn_to_ascii("domain", 0, INTL_IDNA_VARIANT_UTS46 + 10));
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage(), PHP_EOL;
+}
+
+echo "bad variant, named argument:", "\n";
+try {
+    var_dump(idn_to_utf8("xn--fuball-cta.com", variant: INTL_IDNA_VARIANT_UTS46 + 10));
 } catch (Throwable $e) {
     echo $e::class, ': ', $e->getMessage(), PHP_EOL;
 }
@@ -45,7 +47,9 @@ var_dump($foo["errors"]==IDNA_ERROR_CONTEXTJ);
 --EXPECT--
 => PHP level errors
 bad variant:
-ValueError: idn_to_ascii(): Argument #2 ($flags) must be INTL_IDNA_VARIANT_UTS46
+ValueError: idn_to_ascii(): Argument #3 ($variant) must be INTL_IDNA_VARIANT_UTS46
+bad variant, named argument:
+ValueError: idn_to_utf8(): Argument #3 ($variant) must be INTL_IDNA_VARIANT_UTS46
 empty domain:
 ValueError: idn_to_ascii(): Argument #1 ($domain) must not be empty
 with error, but no details arg:

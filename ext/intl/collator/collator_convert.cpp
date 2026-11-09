@@ -22,10 +22,8 @@
 #include <unicode/unistr.h>
 #endif
 
-extern "C" {
 #include "php_intl.h"
 #include "intl_convert.h"
-}
 #include "collator_class.h"
 #include "collator_is_numeric.h"
 #include "collator_convert.h"
@@ -37,6 +35,20 @@ extern "C" {
 			Z_TRY_ADDREF_P(retval);              \
 			return retval;                       \
 	}
+
+static void collator_set_conversion_error(UErrorCode status, const char *message)
+{
+	if (U_SUCCESS(status)) {
+		status = U_MEMORY_ALLOCATION_ERROR;
+	}
+
+	ZEND_ASSERT(INTL_G(current_collator_error) != nullptr);
+	intl_error *err = INTL_G(current_collator_error);
+	intl_error_reset(err);
+	err->code = status;
+	err->custom_error_message = zend_string_init(
+		message, strlen(message), false);
+}
 
 /* {{{ collator_convert_hash_item_from_utf8_to_utf16 */
 static void collator_convert_hash_item_from_utf8_to_utf16(
@@ -113,7 +125,7 @@ static void collator_convert_hash_item_from_utf16_to_utf8(
 /* {{{ collator_convert_hash_from_utf8_to_utf16
  *  Convert values of the given hash from UTF-8 encoding to UTF-16LE.
  */
-U_CFUNC void collator_convert_hash_from_utf8_to_utf16( HashTable* hash, UErrorCode* status )
+void collator_convert_hash_from_utf8_to_utf16( HashTable* hash, UErrorCode* status )
 {
 	zend_ulong    hashIndex;
 	zval *hashData;
@@ -132,7 +144,7 @@ U_CFUNC void collator_convert_hash_from_utf8_to_utf16( HashTable* hash, UErrorCo
 /* {{{ collator_convert_hash_from_utf16_to_utf8
  * Convert values of the given hash from UTF-16LE encoding to UTF-8.
  */
-U_CFUNC void collator_convert_hash_from_utf16_to_utf8( HashTable* hash, UErrorCode* status )
+void collator_convert_hash_from_utf16_to_utf8( HashTable* hash, UErrorCode* status )
 {
 	zend_ulong hashIndex;
 	zend_string *hashKey;
@@ -157,7 +169,7 @@ U_CFUNC void collator_convert_hash_from_utf16_to_utf8( HashTable* hash, UErrorCo
  *
  * @return zval* Converted string.
  */
-U_CFUNC zval* collator_convert_zstr_utf16_to_utf8( zval* utf16_zval, zval *rv )
+zval* collator_convert_zstr_utf16_to_utf8( zval* utf16_zval, zval *rv )
 {
 	zend_string* u8str;
 	UErrorCode status = U_ZERO_ERROR;
@@ -166,16 +178,17 @@ U_CFUNC zval* collator_convert_zstr_utf16_to_utf8( zval* utf16_zval, zval *rv )
 	u8str = intl_convert_utf16_to_utf8(
 		(UChar*) Z_STRVAL_P(utf16_zval), UCHARS( Z_STRLEN_P(utf16_zval) ), &status );
 	if( !u8str ) {
-		php_error( E_WARNING, "Error converting utf16 to utf8 in collator_convert_zval_utf16_to_utf8()" );
-		ZVAL_EMPTY_STRING( rv );
-	} else {
-		ZVAL_NEW_STR( rv, u8str );
+		collator_set_conversion_error(status, "Error converting string from UTF-16 to UTF-8");
+		ZVAL_NULL( rv );
+		return nullptr;
 	}
+
+	ZVAL_NEW_STR( rv, u8str );
 	return rv;
 }
 /* }}} */
 
-U_CFUNC zend_string *collator_convert_zstr_utf8_to_utf16(zend_string *utf8_str)
+zend_string *collator_convert_zstr_utf8_to_utf16(zend_string *utf8_str)
 {
 	UErrorCode status = U_ZERO_ERROR;
 
@@ -183,11 +196,9 @@ U_CFUNC zend_string *collator_convert_zstr_utf8_to_utf16(zend_string *utf8_str)
 	zend_string *zstr = intl_convert_utf8_to_utf16_zstr(
 			ZSTR_VAL(utf8_str), ZSTR_LEN(utf8_str),
 			&status);
-	// FIXME Or throw error or use intl internal error handler
 	if (U_FAILURE(status)) {
-		php_error(E_WARNING,
-			"Error casting object to string in collator_convert_zstr_utf8_to_utf16()");
-		zstr = ZSTR_EMPTY_ALLOC();
+		collator_set_conversion_error(status, "Error converting string from UTF-8 to UTF-16");
+		return nullptr;
 	}
 
 	return zstr;
@@ -196,7 +207,7 @@ U_CFUNC zend_string *collator_convert_zstr_utf8_to_utf16(zend_string *utf8_str)
 /* {{{ collator_convert_object_to_string
  * Convert object to UTF16-encoded string.
  */
-U_CFUNC zval* collator_convert_object_to_string( zval* obj, zval *rv )
+zval* collator_convert_object_to_string( zval* obj, zval *rv )
 {
 	zval* zstr        = nullptr;
 	UErrorCode status = U_ZERO_ERROR;
@@ -214,12 +225,19 @@ U_CFUNC zval* collator_convert_object_to_string( zval* obj, zval *rv )
 	{
 		/* cast_object failed => bail out. */
 		zval_ptr_dtor( zstr );
+		ZVAL_NULL( zstr );
+		if( EG(exception) ) {
+			return nullptr;
+		}
 		COLLATOR_CONVERT_RETURN_FAILED( obj );
 	}
 
 	/* Object wasn't successfully converted => bail out. */
 	if( zstr == nullptr )
 	{
+		if( EG(exception) ) {
+			return nullptr;
+		}
 		COLLATOR_CONVERT_RETURN_FAILED( obj );
 	}
 
@@ -227,10 +245,11 @@ U_CFUNC zval* collator_convert_object_to_string( zval* obj, zval *rv )
 	zend_string *converted_str = intl_convert_utf8_to_utf16_zstr(
 			Z_STRVAL_P( zstr ), Z_STRLEN_P( zstr ),
 			&status );
-	// FIXME Or throw error or use intl internal error handler
 	if( U_FAILURE( status ) ) {
-		php_error( E_WARNING, "Error casting object to string in collator_convert_object_to_string()" );
-		converted_str = ZSTR_EMPTY_ALLOC();
+		collator_set_conversion_error(status, "Error converting object string from UTF-8 to UTF-16");
+		zval_ptr_dtor( zstr );
+		ZVAL_NULL( zstr );
+		return nullptr;
 	}
 
 	/* Cleanup zstr to hold utf16 string. */
@@ -251,7 +270,7 @@ U_CFUNC zval* collator_convert_object_to_string( zval* obj, zval *rv )
  *
  * @return zval* Number. If str is not numeric string return number zero.
  */
-U_CFUNC zval* collator_convert_string_to_number( zval* str, zval *rv )
+zval* collator_convert_string_to_number( zval* str, zval *rv )
 {
 	zval* num = collator_convert_string_to_number_if_possible( str, rv );
 	if( num == str )
@@ -275,7 +294,7 @@ U_CFUNC zval* collator_convert_string_to_number( zval* str, zval *rv )
  *
  * @return zval* Number. If str is not numeric string return number zero.
  */
-U_CFUNC zval* collator_convert_string_to_double( zval* str, zval *rv )
+zval* collator_convert_string_to_double( zval* str, zval *rv )
 {
 	zval* num = collator_convert_string_to_number( str, rv );
 	if( Z_TYPE_P(num) == IS_LONG )
@@ -296,7 +315,7 @@ U_CFUNC zval* collator_convert_string_to_double( zval* str, zval *rv )
  * @return zval* Number if str is numeric string. Otherwise
  *               original str param.
  */
-U_CFUNC zval* collator_convert_string_to_number_if_possible( zval* str, zval *rv )
+zval* collator_convert_string_to_number_if_possible( zval* str, zval *rv )
 {
 	uint8_t is_numeric = 0;
 	zend_long lval      = 0;
@@ -330,7 +349,7 @@ U_CFUNC zval* collator_convert_string_to_number_if_possible( zval* str, zval *rv
  *
  * @return zend_string* UTF16 string.
  */
-U_CFUNC zend_string *collator_zval_to_string(zval *arg)
+zend_string *collator_zval_to_string(zval *arg)
 {
 	// TODO: This is extremely weird in that it leaves pre-existing strings alone and does not
 	// perform a UTF-8 to UTF-16 conversion for them. The assumption is that values that are
@@ -339,7 +358,11 @@ U_CFUNC zend_string *collator_zval_to_string(zval *arg)
 		return zend_string_copy(Z_STR_P(arg));
 	}
 
-	zend_string *utf8_str = zval_get_string(arg);
+	zend_string *utf8_str = zval_try_get_string(arg);
+	if (utf8_str == nullptr) {
+		return nullptr;
+	}
+
 	zend_string *utf16_str = collator_convert_zstr_utf8_to_utf16(utf8_str);
 	zend_string_release(utf8_str);
 	return utf16_str;
@@ -354,7 +377,7 @@ U_CFUNC zend_string *collator_zval_to_string(zval *arg)
  * @return zval* Normalized copy of arg or unmodified arg
  *               if normalization is not needed.
  */
-U_CFUNC zval* collator_normalize_sort_argument( zval* arg, zval *rv )
+zval* collator_normalize_sort_argument( zval* arg, zval *rv )
 {
 	zval* n_arg = nullptr;
 

@@ -323,6 +323,7 @@ ZEND_API void ZEND_FASTCALL convert_to_object(zval *op);
 ZEND_API zend_long    ZEND_FASTCALL zval_get_long_func(const zval *op, bool is_strict);
 ZEND_API zend_long    ZEND_FASTCALL zval_try_get_long(const zval *op, bool *failed);
 ZEND_API double       ZEND_FASTCALL zval_get_double_func(const zval *op);
+ZEND_API double       ZEND_FASTCALL zval_try_get_double_func(const zval *op, bool *failed);
 ZEND_API zend_string* ZEND_FASTCALL zval_get_string_func(const zval *op);
 ZEND_API zend_string* ZEND_FASTCALL zval_try_get_string_func(const zval *op);
 
@@ -334,6 +335,13 @@ static zend_always_inline zend_long zval_get_long_ex(const zval *op, bool is_str
 }
 static zend_always_inline double zval_get_double(const zval *op) {
 	return EXPECTED(Z_TYPE_P(op) == IS_DOUBLE) ? Z_DVAL_P(op) : zval_get_double_func(op);
+}
+static zend_always_inline double zval_try_get_double(const zval *op, bool *failed) {
+	if (EXPECTED(Z_TYPE_P(op) == IS_DOUBLE)) {
+		*failed = false;
+		return Z_DVAL_P(op);
+	}
+	return zval_try_get_double_func(op, failed);
 }
 static zend_always_inline zend_string *zval_get_string(const zval *op) {
 	return EXPECTED(Z_TYPE_P(op) == IS_STRING) ? zend_string_copy(Z_STR_P(op)) : zval_get_string_func(op);
@@ -479,11 +487,17 @@ ZEND_API char*        ZEND_FASTCALL zend_str_toupper_dup_ex(const char *source, 
 ZEND_API zend_string* ZEND_FASTCALL zend_string_tolower_ex(zend_string *str, bool persistent);
 ZEND_API zend_string* ZEND_FASTCALL zend_string_toupper_ex(zend_string *str, bool persistent);
 
+ZEND_API zend_string* ZEND_FASTCALL zend_string_ftolower_ex(zend_string *str, bool persistent);
+
 static zend_always_inline zend_string* zend_string_tolower(zend_string *str) {
 	return zend_string_tolower_ex(str, false);
 }
 static zend_always_inline zend_string* zend_string_toupper(zend_string *str) {
 	return zend_string_toupper_ex(str, false);
+}
+
+static zend_always_inline zend_string* zend_string_ftolower(zend_string *str) {
+	return zend_string_ftolower_ex(str, false);
 }
 
 ZEND_API int ZEND_FASTCALL zend_binary_strcmp(const char *s1, size_t len1, const char *s2, size_t len2);

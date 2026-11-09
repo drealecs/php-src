@@ -24,7 +24,6 @@
 #include "mysqlnd_priv.h"
 #include "mysqlnd_statistics.h"
 #include "mysqlnd_debug.h"
-#include "mysqlnd_reverse_api.h"
 #include "mysqlnd_ext_plugin.h"
 
 static bool mysqlnd_library_initted = FALSE;
@@ -57,7 +56,6 @@ PHPAPI void mysqlnd_library_end(void)
 		mysqlnd_stats_end(mysqlnd_global_stats, 1);
 		mysqlnd_global_stats = NULL;
 		mysqlnd_library_initted = FALSE;
-		mysqlnd_reverse_api_end();
 	}
 }
 /* }}} */
@@ -71,7 +69,6 @@ PHPAPI void mysqlnd_library_init(void)
 		mysqlnd_conn_set_methods(&MYSQLND_CLASS_METHOD_TABLE_NAME(mysqlnd_conn));
 		mysqlnd_conn_data_set_methods(&MYSQLND_CLASS_METHOD_TABLE_NAME(mysqlnd_conn_data));
 		_mysqlnd_init_ps_subsystem();
-		/* Should be calloc, as mnd_calloc will reference LOCK_access*/
 		mysqlnd_stats_init(&mysqlnd_global_stats, STAT_LAST, 1);
 		mysqlnd_plugin_subsystem_init();
 		{
@@ -83,8 +80,6 @@ PHPAPI void mysqlnd_library_init(void)
 #endif
 		mysqlnd_debug_trace_plugin_register();
 		mysqlnd_register_builtin_authentication_plugins();
-
-		mysqlnd_reverse_api_init();
 
 #if MYSQLND_CHARSETS_SANITY_CHECK == 1
 		void mysqlnd_charsets_sanity_check(void);

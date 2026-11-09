@@ -18,6 +18,7 @@
 
 #include <unicode/ustring.h>
 
+BEGIN_EXTERN_C()
 void intl_convert_utf8_to_utf16(
 	UChar**     target, int32_t* target_len,
 	const char* src,    size_t  src_len,
@@ -30,5 +31,14 @@ zend_string *intl_convert_utf8_to_utf16_zstr(
 zend_string* intl_convert_utf16_to_utf8(
 	const UChar* src,    int32_t  src_len,
 	UErrorCode*  status );
+
+bool intl_convert_utf8_offset_to_utf16(
+	const char* str, size_t   str_len,
+	int32_t*    position, UErrorCode* status );
+
+int32_t intl_convert_utf16_offset_to_utf8(
+	const UChar* str, int32_t  str_len,
+	int32_t      position );
+END_EXTERN_C()
 
 #endif // INTL_CONVERT_H

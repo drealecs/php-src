@@ -20,8 +20,6 @@
 
 #include "php.h"
 #if defined(HAVE_LIBXML) && defined(HAVE_DOM)
-#include "zend_enum.h"
-#include "zend_attributes.h"
 #include "php_dom.h"
 #include "obj_map.h"
 #include "nodelist.h"
@@ -145,7 +143,7 @@ static HashTable dom_xpath_prop_handlers;
 
 static zend_object *dom_objects_namespace_node_new(zend_class_entry *class_type);
 static void dom_object_namespace_node_free_storage(zend_object *object);
-static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original);
+static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original, xmlDocPtr fallback_doc);
 
 typedef zend_result (*dom_read_t)(dom_object *obj, zval *retval);
 typedef zend_result (*dom_write_t)(dom_object *obj, zval *newval);
@@ -484,7 +482,7 @@ static void dom_unset_property(zend_object *object, zend_string *member, void **
 	dom_object *obj = php_dom_obj_from_obj(object);
 
 	if (obj->prop_handler != NULL && zend_hash_exists(obj->prop_handler, member)) {
-		zend_throw_error(NULL, "Cannot unset %s::$%s", ZSTR_VAL(object->ce->name), ZSTR_VAL(member));
+		zend_throw_error(NULL, "Cannot unset %pS::$%pS", object->ce->name, member);
 		return;
 	}
 
@@ -662,9 +660,11 @@ static zend_object *dom_objects_store_clone_obj(zend_object *zobject) /* {{{ */
 			xmlNodePtr cloned_node = dom_clone_node(php_dom_ns_mapper_from_private(private_data), node, node->doc, true);
 			if (cloned_node != NULL) {
 				dom_update_refcount_after_clone(intern, node, clone, cloned_node);
-			}
-			if (private_data != NULL) {
-				clone->document->private_data = php_dom_libxml_private_data_header(private_data);
+				if (private_data != NULL) {
+					clone->document->private_data = php_dom_libxml_private_data_header(private_data);
+				}
+			} else if (private_data != NULL && (node->type == XML_DOCUMENT_NODE || node->type == XML_HTML_DOCUMENT_NODE)) {
+				php_dom_private_data_destroy(private_data);
 			}
 		}
 	}
@@ -725,7 +725,8 @@ static zend_object *dom_object_namespace_node_clone_obj(zend_object *zobject)
 	xmlNodePtr original_node = dom_object_get_node(&intern->dom);
 	if (original_node != NULL) {
 		ZEND_ASSERT(original_node->type == XML_NAMESPACE_DECL);
-		xmlNodePtr cloned_node = php_dom_create_fake_namespace_decl_node_ptr(original_node->parent, original_node->ns);
+		xmlNodePtr parent = intern->parent_intern ? dom_object_get_node(intern->parent_intern) : NULL;
+		xmlNodePtr cloned_node = php_dom_create_fake_namespace_decl_node_ptr(parent, original_node->ns, original_node->doc);
 		dom_update_refcount_after_clone(&intern->dom, original_node, &clone_intern->dom, cloned_node);
 	}
 
@@ -1446,14 +1447,13 @@ void node_list_unlink(xmlNodePtr node)
 	dom_object *wrapper;
 
 	while (node != NULL) {
+		xmlNodePtr next = node->next;
 
 		wrapper = php_dom_object_get_data(node);
 
 		if (wrapper != NULL ) {
 			xmlUnlinkNode(node);
-		} else {
-			if (node->type == XML_ENTITY_REF_NODE)
-				break;
+		} else if (node->type != XML_ENTITY_REF_NODE) {
 			node_list_unlink(node->children);
 
 			switch (node->type) {
@@ -1470,7 +1470,7 @@ void node_list_unlink(xmlNodePtr node)
 
 		}
 
-		node = node->next;
+		node = next;
 	}
 }
 /* }}} end node_list_unlink */
@@ -1910,9 +1910,26 @@ static void dom_merge_adjacent_exclusive_text_nodes(xmlNodePtr node)
 	}
 }
 
+static zend_always_inline bool dom_normalize_check_stack_limit(void)
+{
+#ifdef ZEND_CHECK_STACK_LIMIT
+	if (UNEXPECTED(zend_call_stack_overflowed(EG(stack_limit)))) {
+		if (!EG(exception)) {
+			zend_throw_error(NULL, "Maximum call stack size reached. Infinite recursion?");
+		}
+		return true;
+	}
+#endif
+	return false;
+}
+
 /* {{{ void php_dom_normalize_legacy(xmlNodePtr nodep) */
 void php_dom_normalize_legacy(xmlNodePtr nodep)
 {
+	if (UNEXPECTED(dom_normalize_check_stack_limit())) {
+		return;
+	}
+
 	xmlNodePtr child = nodep->children;
 	while(child != NULL) {
 		switch (child->type) {
@@ -1945,6 +1962,10 @@ void php_dom_normalize_legacy(xmlNodePtr nodep)
 /* https://dom.spec.whatwg.org/#dom-node-normalize */
 void php_dom_normalize_modern(xmlNodePtr this)
 {
+	if (UNEXPECTED(dom_normalize_check_stack_limit())) {
+		return;
+	}
+
 	/* for each descendant exclusive Text node node of this: */
 	xmlNodePtr node = this->children;
 	while (node != NULL) {
@@ -2241,15 +2262,16 @@ xmlNsPtr dom_get_nsdecl(xmlNode *node, xmlChar *localName) {
 }
 /* }}} end dom_get_nsdecl */
 
-static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original)
+static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, xmlNsPtr original, xmlDocPtr fallback_doc)
 {
 	xmlNodePtr attrp;
+	xmlDocPtr doc = nodep ? nodep->doc : fallback_doc;
 	xmlNsPtr curns = xmlNewNs(NULL, original->href, NULL);
 	if (original->prefix) {
 		curns->prefix = xmlStrdup(original->prefix);
-		attrp = xmlNewDocNode(nodep->doc, NULL, BAD_CAST original->prefix, original->href);
+		attrp = xmlNewDocNode(doc, NULL, BAD_CAST original->prefix, original->href);
 	} else {
-		attrp = xmlNewDocNode(nodep->doc, NULL, BAD_CAST "xmlns", original->href);
+		attrp = xmlNewDocNode(doc, NULL, BAD_CAST "xmlns", original->href);
 	}
 	attrp->type = XML_NAMESPACE_DECL;
 	attrp->parent = nodep;
@@ -2260,7 +2282,7 @@ static xmlNodePtr php_dom_create_fake_namespace_decl_node_ptr(xmlNodePtr nodep, 
 /* Note: Assumes the additional lifetime was already added in the caller. */
 xmlNodePtr php_dom_create_fake_namespace_decl(xmlNodePtr nodep, xmlNsPtr original, zval *return_value, dom_object *parent_intern)
 {
-	xmlNodePtr attrp = php_dom_create_fake_namespace_decl_node_ptr(nodep, original);
+	xmlNodePtr attrp = php_dom_create_fake_namespace_decl_node_ptr(nodep, original, NULL);
 	php_dom_create_object(attrp, return_value, parent_intern);
 	/* This object must exist, because we just created an object for it via php_dom_create_object(). */
 	php_dom_namespace_node_obj_from_obj(Z_OBJ_P(return_value))->parent_intern = parent_intern;
@@ -2287,7 +2309,7 @@ static bool dom_nodemap_or_nodelist_process_offset_as_named(zval *offset, zend_l
 static zval *dom_nodelist_read_dimension(zend_object *object, zval *offset, int type, zval *rv)
 {
 	if (UNEXPECTED(!offset)) {
-		zend_throw_error(NULL, "Cannot access %s without offset", ZSTR_VAL(object->ce->name));
+		zend_throw_error(NULL, "Cannot access %pS without offset", object->ce->name);
 		return NULL;
 	}
 
@@ -2328,6 +2350,15 @@ void dom_remove_all_children(xmlNodePtr nodep)
 		nodep->children = NULL;
 		nodep->last = NULL;
 	}
+}
+
+xmlAttrPtr dom_set_attribute_value(xmlNodePtr element, xmlNsPtr ns, const xmlChar *name, const xmlChar *value)
+{
+	xmlAttrPtr existing = xmlHasNsProp(element, name, ns == NULL ? NULL : ns->href);
+	if (existing != NULL && existing->type != XML_ATTRIBUTE_DECL) {
+		node_list_unlink(existing->children);
+	}
+	return xmlSetNsProp(element, ns, name, value);
 }
 
 void php_dom_get_content_into_zval(const xmlNode *nodep, zval *return_value, bool null_on_failure)
@@ -2379,7 +2410,7 @@ void php_dom_get_content_into_zval(const xmlNode *nodep, zval *return_value, boo
 static zval *dom_nodemap_read_dimension(zend_object *object, zval *offset, int type, zval *rv)
 {
 	if (UNEXPECTED(!offset)) {
-		zend_throw_error(NULL, "Cannot access %s without offset", ZSTR_VAL(object->ce->name));
+		zend_throw_error(NULL, "Cannot access %pS without offset", object->ce->name);
 		return NULL;
 	}
 
@@ -2423,7 +2454,7 @@ static int dom_nodemap_has_dimension(zend_object *object, zval *member, int chec
 static zval *dom_modern_nodemap_read_dimension(zend_object *object, zval *offset, int type, zval *rv)
 {
 	if (UNEXPECTED(!offset)) {
-		zend_throw_error(NULL, "Cannot append to %s", ZSTR_VAL(object->ce->name));
+		zend_throw_error(NULL, "Cannot append to %pS", object->ce->name);
 		return NULL;
 	}
 

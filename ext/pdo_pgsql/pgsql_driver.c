@@ -251,6 +251,11 @@ static void pgsql_handle_closer(pdo_dbh_t *dbh) /* {{{ */
 			pefree(H->lob_streams, dbh->is_persistent);
 			H->lob_streams = NULL;
 		}
+		if (H->prepared_stmts) {
+			zend_hash_destroy(H->prepared_stmts);
+			pefree(H->prepared_stmts, 1);
+			H->prepared_stmts = NULL;
+		}
 		pdo_pgsql_cleanup_notice_callback(H);
 		if (H->server) {
 			PQfinish(H->server);
@@ -265,6 +270,18 @@ static void pgsql_handle_closer(pdo_dbh_t *dbh) /* {{{ */
 	}
 }
 /* }}} */
+
+#ifdef HAVE_PG_SET_CHUNKED_ROWS_SIZE
+static bool pdo_pgsql_check_chunk_size(zend_long size)
+{
+	if (size < 0 || ZEND_LONG_EXCEEDS_INT(size)) {
+		zend_value_error("Pdo\\Pgsql::ATTR_CHUNK_SIZE must be between 0 and %d", INT_MAX);
+		return false;
+	}
+
+	return true;
+}
+#endif
 
 static bool pgsql_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stmt_t *stmt, zval *driver_options)
 {
@@ -285,7 +302,50 @@ static bool pgsql_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stmt_t *
 	scrollable = pdo_attr_lval(driver_options, PDO_ATTR_CURSOR,
 		PDO_CURSOR_FWDONLY) == PDO_CURSOR_SCROLL;
 
+	bool prefetch_given = driver_options
+		&& (val = zend_hash_index_find(Z_ARRVAL_P(driver_options), PDO_ATTR_PREFETCH));
+
+	S->is_unbuffered = prefetch_given && pdo_get_long_param(&lval, val)
+		? !lval
+		: H->default_fetching_laziness;
+
+#ifdef HAVE_PG_SET_CHUNKED_ROWS_SIZE
+	bool chunk_size_given = driver_options
+		&& (val = zend_hash_index_find(Z_ARRVAL_P(driver_options), PDO_PGSQL_ATTR_CHUNK_SIZE));
+
+	if (chunk_size_given) {
+		if (!pdo_get_long_param(&lval, val)) {
+			return false;
+		}
+		S->chunk_size = lval;
+	} else if (prefetch_given) {
+		/* the statement's own prefetch replaces an inherited chunk size */
+		S->chunk_size = 0;
+	} else {
+		S->chunk_size = H->default_chunk_size;
+	}
+
+	if (!pdo_pgsql_check_chunk_size(S->chunk_size)) {
+		return false;
+	}
+
+	if (S->chunk_size >= 1 && scrollable) {
+		if (chunk_size_given) {
+			zend_value_error("Pdo\\Pgsql::ATTR_CHUNK_SIZE cannot be combined with "
+				"PDO::ATTR_CURSOR set to PDO::CURSOR_SCROLL");
+			return false;
+		}
+
+		S->chunk_size = 0;
+	}
+
+	if (S->chunk_size >= 1) {
+		S->is_unbuffered = true;
+	}
+#endif
+
 	if (scrollable) {
+		S->is_unbuffered = false;
 		if (S->cursor_name) {
 			efree(S->cursor_name);
 		}
@@ -309,14 +369,6 @@ static bool pgsql_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stmt_t *
 		stmt->supports_placeholders = PDO_PLACEHOLDER_NAMED;
 		stmt->named_rewrite_template = "$%d";
 	}
-
-	S->is_unbuffered =
-		driver_options
-		&& (val = zend_hash_index_find(Z_ARRVAL_P(driver_options), PDO_ATTR_PREFETCH))
-		&& pdo_get_long_param(&lval, val)
-		? !lval
-		: H->default_fetching_laziness
-	;
 
 	ret = pdo_parse_params(stmt, sql, &nsql);
 
@@ -392,15 +444,14 @@ static zend_string* pgsql_handle_quoter(pdo_dbh_t *dbh, const zend_string *unquo
 				return NULL;
 			}
 			quotedlen = tmp_len + 1;
-			quoted = emalloc(quotedlen + 1);
-			memcpy(quoted+1, escaped, quotedlen-2);
-			quoted[0] = '\'';
-			quoted[quotedlen-1] = '\'';
-			quoted[quotedlen] = '\0';
+			quoted = zend_cstr_concat3(
+				"'", 1,
+				(const char *) escaped, quotedlen - 2,
+				"'", 1);
 			PQfreemem(escaped);
 			break;
 		default:
-			quoted = safe_emalloc(2, ZSTR_LEN(unquoted), 3);
+			quoted = safe_emalloc(ZSTR_LEN(unquoted) * 2, sizeof(char), 3);
 			quoted[0] = '\'';
 			quotedlen = PQescapeStringConn(H->server, quoted + 1, ZSTR_VAL(unquoted), ZSTR_LEN(unquoted), &err);
 			if (err) {
@@ -473,6 +524,12 @@ static int pdo_pgsql_get_attribute(pdo_dbh_t *dbh, zend_long attr, zval *return_
 		case PDO_PGSQL_ATTR_DISABLE_PREPARES:
 			ZVAL_BOOL(return_value, H->disable_prepares);
 			break;
+
+#ifdef HAVE_PG_SET_CHUNKED_ROWS_SIZE
+		case PDO_PGSQL_ATTR_CHUNK_SIZE:
+			ZVAL_LONG(return_value, H->default_chunk_size);
+			break;
+#endif
 
 		case PDO_ATTR_CLIENT_VERSION: {
 			char buf[16];
@@ -1346,12 +1403,31 @@ static void pdo_pgsql_request_shutdown(pdo_dbh_t *dbh)
 	pdo_pgsql_db_handle *H = (pdo_pgsql_db_handle *)dbh->driver_data;
 
 	if(H->server) {
-		res = PQexec(H->server, "DISCARD ALL");
+		zend_string *name;
 
-		if(res) {
+		ZEND_HASH_MAP_FOREACH_STR_KEY(H->prepared_stmts, name) {
+#ifndef HAVE_PQCLOSEPREPARED
+			char *q;
+			spprintf(&q, 0, "DEALLOCATE %s", ZSTR_VAL(name));
+			res = PQexec(H->server, q);
+			efree(q);
+#else
+			res = PQclosePrepared(H->server, ZSTR_VAL(name));
+#endif
 			PQclear(res);
+		} ZEND_HASH_FOREACH_END();
+		zend_hash_clean(H->prepared_stmts);
+
+		res = PQexec(H->server, "CLOSE ALL; SET SESSION AUTHORIZATION DEFAULT; RESET ALL; UNLISTEN *; "
+			"SELECT pg_advisory_unlock_all(); DISCARD TEMP; DISCARD SEQUENCES");
+
+		if (PQresultStatus(res) != PGRES_COMMAND_OK && PQstatus(H->server) == CONNECTION_OK) {
+			PQreset(H->server);
 		}
+		PQclear(res);
 	}
+
+	pdo_pgsql_cleanup_notice_callback(H);
 }
 
 static bool pdo_pgsql_set_attr(pdo_dbh_t *dbh, zend_long attr, zval *val)
@@ -1377,7 +1453,22 @@ static bool pdo_pgsql_set_attr(pdo_dbh_t *dbh, zend_long attr, zval *val)
 				return false;
 			}
 			H->default_fetching_laziness = !bval;
+			H->default_chunk_size = 0;
 			return true;
+#ifdef HAVE_PG_SET_CHUNKED_ROWS_SIZE
+		case PDO_PGSQL_ATTR_CHUNK_SIZE: {
+			zend_long lval;
+
+			if (!pdo_get_long_param(&lval, val)) {
+				return false;
+			}
+			if (!pdo_pgsql_check_chunk_size(lval)) {
+				return false;
+			}
+			H->default_chunk_size = lval;
+			return true;
+		}
+#endif
 		default:
 			return false;
 	}
@@ -1445,17 +1536,21 @@ static int pdo_pgsql_handle_factory(pdo_dbh_t *dbh, zval *driver_options) /* {{{
 
 	/* support both full connection string & connection string + login and/or password */
 	if (tmp_user) {
-		smart_str_append_printf(&conn_str, " user='%s'", ZSTR_VAL(tmp_user));
+		smart_str_append_printf(&conn_str, " user='%pS'", tmp_user);
 	}
 
 	if (tmp_pass) {
-		smart_str_append_printf(&conn_str, " password='%s'", ZSTR_VAL(tmp_pass));
+		smart_str_append_printf(&conn_str, " password='%pS'", tmp_pass);
 	}
 	smart_str_0(&conn_str);
 
 	H->server = PQconnectdb(ZSTR_VAL(conn_str.s));
 	H->lob_streams = (HashTable *) pemalloc(sizeof(HashTable), dbh->is_persistent);
 	zend_hash_init(H->lob_streams, 0, NULL, NULL, 1);
+	if (dbh->is_persistent) {
+		H->prepared_stmts = (HashTable *) pemalloc(sizeof(HashTable), 1);
+		zend_hash_init(H->prepared_stmts, 0, NULL, NULL, 1);
+	}
 
 	if (tmp_user) {
 		zend_string_release_ex(tmp_user, 0);

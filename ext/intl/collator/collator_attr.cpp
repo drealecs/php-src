@@ -22,9 +22,7 @@
 #include <unicode/unistr.h>
 #endif
 
-extern "C" {
 #include "php_intl.h"
-}
 #include "collator_class.h"
 #include "collator_convert.h"
 
@@ -46,6 +44,10 @@ U_CFUNC PHP_FUNCTION( collator_get_attribute )
 
 	/* Fetch the object. */
 	COLLATOR_METHOD_FETCH_OBJECT;
+
+	if (collator_check_initialized(co) == FAILURE) {
+		RETURN_THROWS();
+	}
 
 	value = ucol_getAttribute( co->ucoll, static_cast<UColAttribute>(attribute), COLLATOR_ERROR_CODE_P( co ) );
 	COLLATOR_CHECK_STATUS( co, "Error getting attribute value" );
@@ -71,6 +73,10 @@ U_CFUNC PHP_FUNCTION( collator_set_attribute )
 	/* Fetch the object. */
 	COLLATOR_METHOD_FETCH_OBJECT;
 
+	if (collator_check_initialized(co) == FAILURE) {
+		RETURN_THROWS();
+	}
+
 	/* Set new value for the given attribute. */
 	ucol_setAttribute( co->ucoll, static_cast<UColAttribute>(attribute), static_cast<UColAttributeValue>(value), COLLATOR_ERROR_CODE_P( co ) );
 	COLLATOR_CHECK_STATUS( co, "Error setting attribute value" );
@@ -94,6 +100,10 @@ U_CFUNC PHP_FUNCTION( collator_get_strength )
 	/* Fetch the object. */
 	COLLATOR_METHOD_FETCH_OBJECT;
 
+	if (collator_check_initialized(co) == FAILURE) {
+		RETURN_THROWS();
+	}
+
 	/* Get current strength and return it. */
 	RETURN_LONG( ucol_getStrength( co->ucoll ) );
 }
@@ -115,6 +125,10 @@ U_CFUNC PHP_FUNCTION( collator_set_strength )
 
 	/* Fetch the object. */
 	COLLATOR_METHOD_FETCH_OBJECT;
+
+	if (collator_check_initialized(co) == FAILURE) {
+		RETURN_THROWS();
+	}
 
 	/* Set given strength. */
 	ucol_setStrength( co->ucoll, static_cast<UColAttributeValue>(strength) );

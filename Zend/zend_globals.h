@@ -26,7 +26,7 @@
 
 #include "zend_globals_macros.h"
 
-#include "zend_atomic.h"
+#include "zend_alloc.h"
 #include "zend_stack.h"
 #include "zend_ptr_stack.h"
 #include "zend_hash.h"
@@ -39,6 +39,7 @@
 #include "zend_multiply.h"
 #include "zend_arena.h"
 #include "zend_call_stack.h"
+#include "zend_ini_scanner.h"
 #include "zend_max_execution_timer.h"
 #include "zend_strtod.h"
 #include "zend_lazy_objects.h"
@@ -51,8 +52,6 @@
 BEGIN_EXTERN_C()
 ZEND_API extern int compiler_globals_id;
 ZEND_API extern int executor_globals_id;
-ZEND_API extern size_t compiler_globals_offset;
-ZEND_API extern size_t executor_globals_offset;
 END_EXTERN_C()
 
 #endif
@@ -63,6 +62,9 @@ END_EXTERN_C()
 # define ZEND_MAX_ALLOWED_STACK_SIZE_UNCHECKED -1
 # define ZEND_MAX_ALLOWED_STACK_SIZE_DETECT     0
 #endif
+
+typedef struct _zend_runtime_module zend_runtime_module;
+typedef struct _zend_runtime_context zend_runtime_context;
 
 #include "zend_compile.h"
 
@@ -86,6 +88,12 @@ typedef struct zend_err_buf {
 	uint32_t capacity;
 	zend_error_info **errors;
 } zend_err_buf;
+
+typedef struct _zend_user_handler_stack_entry {
+	zval handler;
+	zend_runtime_module *runtime_module;
+	int error_reporting;
+} zend_user_handler_stack_entry;
 
 struct _zend_compiler_globals {
 	zend_stack loop_var_stack;
@@ -140,6 +148,7 @@ struct _zend_compiler_globals {
 	bool multibyte;
 	bool detect_unicode;
 	bool encoding_declared;
+	bool interned_strings_fallible;
 
 	zend_ast *ast;
 	zend_arena *ast_arena;
@@ -198,6 +207,11 @@ struct _zend_executor_globals {
 	HashTable *class_table;		/* class table */
 	HashTable *zend_constants;	/* constants table */
 
+	HashTable runtime_modules;	/* zend_runtime_module* keyed by name */
+	HashTable runtime_module_root_dependencies;	/* zend_runtime_module* dependencies of the root context */
+	HashTable runtime_module_internal_aliases;	/* Temporary internal class alias names */
+	zend_runtime_context *runtime_module_root_context;
+
 	zval          *vm_stack_top;
 	zval          *vm_stack_end;
 	zend_vm_stack  vm_stack;
@@ -223,8 +237,8 @@ struct _zend_executor_globals {
 
 	bool full_tables_cleanup;
 
-	zend_atomic_bool vm_interrupt;
-	zend_atomic_bool timed_out;
+	atomic_bool vm_interrupt;
+	atomic_bool timed_out;
 
 	HashTable autoload_current_classnames;
 
@@ -243,7 +257,8 @@ struct _zend_executor_globals {
 	bool exception_ignore_args;
 	zval user_error_handler;
 	zval user_exception_handler;
-	zend_stack user_error_handlers_error_reporting;
+	zend_runtime_module *user_error_handler_runtime_module;
+	zend_runtime_module *user_exception_handler_runtime_module;
 	zend_stack user_error_handlers;
 	zend_stack user_exception_handlers;
 
@@ -325,16 +340,26 @@ struct _zend_executor_globals {
 	zend_strtod_state strtod_state;
 
 	HashTable callable_convert_cache;
+	HashTable partial_function_application_cache;
+	zend_stack lambda_cache;
+
+	zend_vm_stack  vm_stack_page_cache;
+	uint32_t       vm_stack_page_cache_count;
+	/* Fibers use a different page size, so they need a separate cache */
+	zend_vm_stack  fiber_vm_stack_page_cache;
+	uint32_t       fiber_vm_stack_page_cache_count;
 
 	void *reserved[ZEND_MAX_RESERVED_RESOURCES];
+
+	zend_oom_info delayed_oom;
 };
 
 #ifdef ZTS
-/* Compile-time offsets of the hot globals, in a reserved region just before the
- * cache pointer. ZEND_AG_OFFSET is furthest, in zend_alloc.c. */
-# define ZEND_CG_OFFSET   (-(ptrdiff_t) TSRM_ALIGNED_SIZE(sizeof(zend_compiler_globals)))
-# define ZEND_EG_OFFSET   (ZEND_CG_OFFSET - (ptrdiff_t) TSRM_ALIGNED_SIZE(sizeof(zend_executor_globals)))
-# define ZEND_SCNG_OFFSET (ZEND_EG_OFFSET - (ptrdiff_t) TSRM_ALIGNED_SIZE(sizeof(zend_php_scanner_globals)))
+struct _zend_tsrm_ls_cache {
+	void *cache;
+	zend_executor_globals eg;
+	zend_compiler_globals cg;
+};
 #endif
 
 #define EG_FLAGS_INITIAL				(0)
@@ -347,19 +372,18 @@ struct _zend_ini_scanner_globals {
 	zend_file_handle *yy_out;
 
 	unsigned int yy_leng;
+	int yy_state;
 	const unsigned char *yy_start;
 	const unsigned char *yy_text;
 	const unsigned char *yy_cursor;
 	const unsigned char *yy_marker;
 	const unsigned char *yy_limit;
-	int yy_state;
 	zend_stack state_stack;
 
 	zend_string *filename;
 	uint32_t lineno;
 
-	/* Modes are: ZEND_INI_SCANNER_NORMAL, ZEND_INI_SCANNER_RAW, ZEND_INI_SCANNER_TYPED */
-	int scanner_mode;
+	zend_ini_scanner_mode scanner_mode;
 };
 
 typedef enum {
@@ -373,18 +397,18 @@ struct _zend_php_scanner_globals {
 	zend_file_handle *yy_out;
 
 	unsigned int yy_leng;
+	int yy_state;
 	unsigned char *yy_start;
 	unsigned char *yy_text;
 	unsigned char *yy_cursor;
 	unsigned char *yy_marker;
 	unsigned char *yy_limit;
-	int yy_state;
 	zend_stack state_stack;
 	zend_ptr_stack heredoc_label_stack;
 	zend_stack nest_location_stack; /* for syntax error reporting */
 	bool heredoc_scan_ahead;
-	int heredoc_indentation;
 	bool heredoc_indentation_uses_spaces;
+	int heredoc_indentation;
 
 	/* original (unfiltered) script */
 	unsigned char *script_org;

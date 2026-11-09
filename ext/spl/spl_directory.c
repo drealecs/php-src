@@ -22,7 +22,6 @@
 #include "ext/standard/flock_compat.h"
 #include "ext/standard/scanf.h"
 #include "ext/standard/php_string.h" /* For php_basename() */
-#include "zend_attributes.h"
 #include "zend_exceptions.h"
 #include "zend_interfaces.h"
 
@@ -39,7 +38,7 @@ static zend_object_handlers spl_filesystem_object_handlers;
 /* includes handler to validate object state when retrieving methods */
 static zend_object_handlers spl_filesystem_object_check_handlers;
 
-/* decalre the class entry */
+/* declare the class entry */
 PHPAPI zend_class_entry *spl_ce_SplFileInfo;
 PHPAPI zend_class_entry *spl_ce_DirectoryIterator;
 PHPAPI zend_class_entry *spl_ce_FilesystemIterator;
@@ -303,7 +302,7 @@ static void spl_filesystem_dir_open(spl_filesystem_object* intern, zend_string *
 		if (!EG(exception)) {
 			/* open failed w/out notice (turned to exception due to EH_THROW) */
 			zend_throw_exception_ex(spl_ce_UnexpectedValueException, 0,
-				"Failed to open directory \"%s\"", ZSTR_VAL(path));
+				"Failed to open directory \"%pS\"", path);
 		}
 	} else {
 		do {
@@ -334,7 +333,7 @@ static zend_result spl_filesystem_file_open(spl_filesystem_object *intern, bool 
 
 	if (!ZSTR_LEN(intern->file_name) || !intern->u.file.stream) {
 		if (!EG(exception)) {
-			zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Cannot open file '%s'", ZSTR_VAL(intern->file_name));
+			zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Cannot open file '%pS'", intern->file_name);
 		}
 		zend_string_release(intern->u.file.open_mode);
 		intern->u.file.open_mode = NULL;
@@ -480,7 +479,7 @@ static spl_filesystem_object *spl_filesystem_object_create_info(zend_string *fil
 
 	if (ce->constructor->common.scope != spl_ce_SplFileInfo) {
 		ZVAL_STR(&arg1, file_path);
-		zend_call_method_with_1_params(Z_OBJ_P(return_value), ce, &ce->constructor, "__construct", NULL, &arg1);
+		zend_call_known_function(ce->constructor, Z_OBJ_P(return_value), ce, NULL, 1, &arg1, NULL);
 	} else {
 		spl_filesystem_info_set_filename(intern, file_path);
 	}
@@ -519,7 +518,7 @@ static spl_filesystem_object *spl_filesystem_object_create_type(int num_args, sp
 
 			if (ce->constructor->common.scope != spl_ce_SplFileInfo) {
 				ZVAL_STR(&arg1, source->file_name);
-				zend_call_method_with_1_params(Z_OBJ_P(return_value), ce, &ce->constructor, "__construct", NULL, &arg1);
+				zend_call_known_function(ce->constructor, Z_OBJ_P(return_value), ce, NULL, 1, &arg1, NULL);
 			} else {
 				intern->file_name = zend_string_copy(source->file_name);
 				intern->path = spl_filesystem_object_get_path(source);
@@ -710,7 +709,7 @@ static void spl_filesystem_object_construct(INTERNAL_FUNCTION_PARAMETERS, zend_l
 	/* spl_filesystem_dir_open() may emit an E_WARNING */
 	zend_replace_error_handling(EH_THROW, spl_ce_UnexpectedValueException, &error_handling);
 	if (SPL_HAS_FLAG(ctor_flags, DIT_CTOR_GLOB) && !zend_string_starts_with_literal(path, "glob://")) {
-		path = zend_strpprintf(0, "glob://%s", ZSTR_VAL(path));
+		path = zend_strpprintf(0, "glob://%pS", path);
 		spl_filesystem_dir_open(intern, path);
 		zend_string_release(path);
 	} else {
@@ -1208,7 +1207,7 @@ PHP_METHOD(SplFileInfo, getLinkTarget)
 #endif
 
 	if (ret == -1) {
-		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Unable to read link %s, error: %s", ZSTR_VAL(intern->file_name), strerror(errno));
+		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Unable to read link %pS, error: %s", intern->file_name, strerror(errno));
 		RETVAL_FALSE;
 	} else {
 		/* Append NULL to the end of the string */
@@ -1319,7 +1318,7 @@ PHP_METHOD(SplFileInfo, getPathInfo)
 	if (ce == NULL) {
 		ce = intern->info_class;
 	} else if (!instanceof_function(ce, spl_ce_SplFileInfo)) {
-		zend_argument_type_error(1, "must be a class name derived from %s or null, %s given", ZSTR_VAL(spl_ce_SplFileInfo->name), ZSTR_VAL(ce->name));
+		zend_argument_type_error(1, "must be a class name derived from %pS or null, %pS given", spl_ce_SplFileInfo->name, ce->name);
 		RETURN_THROWS();
 	}
 
@@ -1504,7 +1503,7 @@ PHP_METHOD(RecursiveDirectoryIterator, getSubPathname)
 	ZEND_PARSE_PARAMETERS_NONE();
 
 	if (intern->u.dir.sub_path) {
-		RETURN_NEW_STR(strpprintf(0, "%s%c%s", ZSTR_VAL(intern->u.dir.sub_path), slash, intern->u.dir.entry.d_name));
+		RETURN_NEW_STR(strpprintf(0, "%pS%c%s", intern->u.dir.sub_path, slash, intern->u.dir.entry.d_name));
 	} else {
 		RETURN_STRING(intern->u.dir.entry.d_name);
 	}
@@ -1777,7 +1776,7 @@ static zend_object_iterator *spl_filesystem_tree_get_iterator(zend_class_entry *
 
 static ZEND_COLD void spl_filesystem_file_cannot_read(spl_filesystem_object *intern)
 {
-	zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Cannot read from file %s", ZSTR_VAL(intern->file_name));
+	zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Cannot read from file %pS", intern->file_name);
 }
 
 static zend_result spl_filesystem_file_read_ex(spl_filesystem_object *intern, bool silent, zend_long line_add, bool csv)
@@ -1905,8 +1904,8 @@ static zend_result spl_filesystem_file_read_line_ex(zval * this_ptr, spl_filesys
 		}
 
 		if (Z_TYPE(retval) != IS_STRING) {
-			zend_type_error("%s::getCurrentLine(): Return value must be of type string, %s returned",
-				ZSTR_VAL(Z_OBJCE_P(this_ptr)->name), zend_zval_value_name(&retval));
+			zend_type_error("%pS::getCurrentLine(): Return value must be of type string, %s returned",
+				Z_OBJCE_P(this_ptr)->name, zend_zval_value_name(&retval));
 			zval_ptr_dtor(&retval);
 			return FAILURE;
 		}
@@ -1943,7 +1942,7 @@ static void spl_filesystem_file_rewind(zval * this_ptr, spl_filesystem_object *i
 		return;
 	}
 	if (-1 == php_stream_rewind(intern->u.file.stream)) {
-		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Cannot rewind file %s", ZSTR_VAL(intern->file_name));
+		zend_throw_exception_ex(spl_ce_RuntimeException, 0, "Cannot rewind file %pS", intern->file_name);
 		return;
 	}
 
@@ -2619,7 +2618,7 @@ PHP_METHOD(SplFileObject, ftruncate)
 
 
 	if (!php_stream_truncate_supported(intern->u.file.stream)) {
-		zend_throw_exception_ex(spl_ce_LogicException, 0, "Can't truncate file %s", ZSTR_VAL(intern->file_name));
+		zend_throw_exception_ex(spl_ce_LogicException, 0, "Can't truncate file %pS", intern->file_name);
 		RETURN_THROWS();
 	}
 

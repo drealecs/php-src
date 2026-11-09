@@ -22,9 +22,7 @@
 #include <unicode/unistr.h>
 #endif
 
-extern "C" {
 #include "php_intl.h"
-}
 #include "collator_class.h"
 #include "intl_convert.h"
 
@@ -48,11 +46,7 @@ U_CFUNC PHP_FUNCTION( collator_get_locale )
 	/* Fetch the object. */
 	COLLATOR_METHOD_FETCH_OBJECT;
 
-	if (!co || !co->ucoll) {
-		intl_error_set_code( nullptr, COLLATOR_ERROR_CODE( co ) );
-		intl_errors_set_custom_msg( COLLATOR_ERROR_P( co ), "Object not initialized");
-		zend_throw_error(nullptr, "Object not initialized");
-
+	if (collator_check_initialized(co) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -63,5 +57,30 @@ U_CFUNC PHP_FUNCTION( collator_get_locale )
 
 	/* Return it. */
 	RETVAL_STRINGL( locale_name, strlen(locale_name) );
+}
+/* }}} */
+
+/* {{{ Gets the collation tailoring rules. */
+U_CFUNC PHP_FUNCTION(collator_get_rules)
+{
+	COLLATOR_METHOD_INIT_VARS
+
+	if (zend_parse_method_parameters(ZEND_NUM_ARGS(), getThis(), "O",
+			&object, Collator_ce_ptr) == FAILURE) {
+		RETURN_THROWS();
+	}
+
+	COLLATOR_METHOD_FETCH_OBJECT;
+
+	if (collator_check_initialized(co) == FAILURE) {
+		RETURN_THROWS();
+	}
+
+	int32_t rules_len;
+	const UChar *rules = ucol_getRules(co->ucoll, &rules_len);
+	zend_string *result = intl_convert_utf16_to_utf8(rules, rules_len, COLLATOR_ERROR_CODE_P(co));
+	COLLATOR_CHECK_STATUS(co, "Error converting collation rules to UTF-8");
+
+	RETURN_STR(result);
 }
 /* }}} */

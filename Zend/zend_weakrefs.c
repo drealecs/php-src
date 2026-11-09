@@ -380,7 +380,7 @@ static zval *zend_weakmap_read_dimension(zend_object *object, zval *offset, int 
 		if (zv == NULL) {
 			if (type != BP_VAR_IS) {
 				zend_throw_error(NULL,
-					"Object %s#%d not contained in WeakMap", ZSTR_VAL(obj_addr->ce->name), obj_addr->handle);
+					"Object %pS#%d not contained in WeakMap", obj_addr->ce->name, obj_addr->handle);
 				return NULL;
 			}
 			return NULL;
@@ -488,8 +488,7 @@ static HashTable *zend_weakmap_get_properties_for(zend_object *object, zend_prop
 		zval pair;
 		array_init(&pair);
 
-		GC_ADDREF(obj);
-		add_assoc_object(&pair, "key", obj);
+		add_assoc_object(&pair, "key", zend_object_copy(obj));
 		Z_TRY_ADDREF_P(val);
 		add_assoc_zval(&pair, "value", val);
 

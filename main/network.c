@@ -443,6 +443,54 @@ ok:
 }
 /* }}} */
 
+PHPAPI void php_network_apply_sockvals(php_socket_t sock, const php_sockvals *sockvals)
+{
+#ifdef SO_LINGER
+	if (sockvals->mask & PHP_SOCKVAL_SO_LINGER) {
+		unsigned short secs = sockvals->linger > USHRT_MAX
+			? USHRT_MAX : (unsigned short)sockvals->linger;
+		struct linger linger_val = {
+			.l_onoff = (sockvals->linger > 0),
+			.l_linger = sockvals->linger > 0 ? secs : 0
+		};
+#ifdef SO_LINGER_SEC
+		setsockopt(sock, SOL_SOCKET, SO_LINGER_SEC, (char*)&linger_val, sizeof(linger_val));
+#else
+		setsockopt(sock, SOL_SOCKET, SO_LINGER, (char*)&linger_val, sizeof(linger_val));
+#endif
+	}
+#endif
+#if defined(TCP_KEEPIDLE)
+	if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPIDLE) {
+		setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&sockvals->keepalive.keepidle, sizeof(sockvals->keepalive.keepidle));
+	}
+#elif defined(TCP_KEEPALIVE)
+	if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPIDLE) {
+		setsockopt(sock, IPPROTO_TCP, TCP_KEEPALIVE, (char*)&sockvals->keepalive.keepidle, sizeof(sockvals->keepalive.keepidle));
+	}
+#endif
+#ifdef TCP_KEEPINTVL
+	if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPINTVL) {
+		setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, (char*)&sockvals->keepalive.keepintvl, sizeof(sockvals->keepalive.keepintvl));
+	}
+#endif
+#ifdef TCP_KEEPCNT
+	if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPCNT) {
+		setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, (char*)&sockvals->keepalive.keepcnt, sizeof(sockvals->keepalive.keepcnt));
+	}
+#endif
+#ifdef SO_RCVBUF
+	if (sockvals->mask & PHP_SOCKVAL_SO_RCVBUF) {
+		setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (char*)&sockvals->rcvbuf, sizeof(sockvals->rcvbuf));
+	}
+#endif
+#ifdef SO_SNDBUF
+	if (sockvals->mask & PHP_SOCKVAL_SO_SNDBUF) {
+		setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char*)&sockvals->sndbuf, sizeof(sockvals->sndbuf));
+	}
+#endif
+}
+
 /* Bind to a local IP address.
  * Returns the bound socket, or -1 on failure.
  * */
@@ -533,28 +581,8 @@ php_socket_t php_network_bind_socket_to_local_addr_ex(const char *host, unsigned
 		}
 #endif
 
-		/* Set socket values if provided */
 		if (sockvals != NULL) {
-#if defined(TCP_KEEPIDLE)
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPIDLE) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&sockvals->keepalive.keepidle, sizeof(sockvals->keepalive.keepidle));
-			}
-#elif defined(TCP_KEEPALIVE)
-			/* macOS uses TCP_KEEPALIVE instead of TCP_KEEPIDLE */
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPIDLE) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPALIVE, (char*)&sockvals->keepalive.keepidle, sizeof(sockvals->keepalive.keepidle));
-			}
-#endif
-#ifdef TCP_KEEPINTVL
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPINTVL) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, (char*)&sockvals->keepalive.keepintvl, sizeof(sockvals->keepalive.keepintvl));
-			}
-#endif
-#ifdef TCP_KEEPCNT
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPCNT) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, (char*)&sockvals->keepalive.keepcnt, sizeof(sockvals->keepalive.keepcnt));
-			}
-#endif
+			php_network_apply_sockvals(sock, sockvals);
 		}
 
 		n = bind(sock, sa, socklen);
@@ -596,7 +624,7 @@ PHPAPI zend_result php_network_parse_network_address_with_port(const char *addr,
 	const char *colon;
 	char *tmp;
 	zend_result ret = FAILURE;
-	short port;
+	zend_long port;
 	struct sockaddr_in *in4 = (struct sockaddr_in*)sa;
 	struct sockaddr **psal;
 	int n;
@@ -614,14 +642,18 @@ PHPAPI zend_result php_network_parse_network_address_with_port(const char *addr,
 		if (!colon || colon[1] != ':') {
 			return FAILURE;
 		}
-		port = atoi(colon + 2);
+		port = ZEND_STRTOL(colon + 2, NULL, 10);
 		addr++;
 	} else {
 		colon = memchr(addr, ':', addrlen);
 		if (!colon) {
 			return FAILURE;
 		}
-		port = atoi(colon + 1);
+		port = ZEND_STRTOL(colon + 1, NULL, 10);
+	}
+
+	if (port < 0 || port > 65535) {
+		return FAILURE;
 	}
 
 	tmp = estrndup(addr, colon - addr);
@@ -1019,28 +1051,8 @@ php_socket_t php_network_connect_socket_to_host_ex(const char *host, unsigned sh
 		}
 #endif
 
-		/* Set socket values if provided */
 		if (sockvals != NULL) {
-#if defined(TCP_KEEPIDLE)
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPIDLE) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, (char*)&sockvals->keepalive.keepidle, sizeof(sockvals->keepalive.keepidle));
-			}
-#elif defined(TCP_KEEPALIVE)
-			/* macOS uses TCP_KEEPALIVE instead of TCP_KEEPIDLE */
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPIDLE) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPALIVE, (char*)&sockvals->keepalive.keepidle, sizeof(sockvals->keepalive.keepidle));
-			}
-#endif
-#ifdef TCP_KEEPINTVL
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPINTVL) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, (char*)&sockvals->keepalive.keepintvl, sizeof(sockvals->keepalive.keepintvl));
-			}
-#endif
-#ifdef TCP_KEEPCNT
-			if (sockvals->mask & PHP_SOCKVAL_TCP_KEEPCNT) {
-				setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, (char*)&sockvals->keepalive.keepcnt, sizeof(sockvals->keepalive.keepcnt));
-			}
-#endif
+			php_network_apply_sockvals(sock, sockvals);
 		}
 
 		n = php_network_connect_socket(sock, sa, socklen, asynchronous,

@@ -124,12 +124,14 @@ typedef struct _php_shutdown_function_entry {
 	zend_fcall_info_cache fci_cache;
 	zval *params;
 	uint32_t param_count;
+	zend_runtime_module *runtime_module;
 } php_shutdown_function_entry;
 
 PHPAPI extern bool register_user_shutdown_function(const char *function_name, size_t function_len, php_shutdown_function_entry *shutdown_function_entry);
 PHPAPI extern bool remove_user_shutdown_function(const char *function_name, size_t function_len);
 PHPAPI extern bool append_user_shutdown_function(php_shutdown_function_entry *shutdown_function_entry);
 
+PHPAPI void php_basic_early_rinit(void);
 PHPAPI void php_call_shutdown_functions(void);
 PHPAPI void php_free_shutdown_functions(void);
 

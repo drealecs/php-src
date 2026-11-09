@@ -35,7 +35,6 @@
 #include "php_pgsql.h"
 #include "php_globals.h"
 #include "zend_exceptions.h"
-#include "zend_attributes.h"
 #include "zend_interfaces.h"
 #include "php_network.h"
 
@@ -288,13 +287,11 @@ static zend_string *_php_pgsql_trim_message(const char *message)
 
 static void php_pgsql_set_default_link(zend_object *obj)
 {
-	GC_ADDREF(obj);
-
 	if (PGG(default_link) != NULL) {
 		zend_object_release(PGG(default_link));
 	}
 
-	PGG(default_link) = obj;
+	PGG(default_link) = zend_object_copy(obj);
 }
 
 static void _close_pgsql_plink(zend_resource *rsrc)
@@ -330,7 +327,7 @@ static void _php_pgsql_notice_handler(void *l, const char *message)
 
 	zend_string *trimmed_message = _php_pgsql_trim_message(message);
 	if (PGG(log_notices)) {
-		php_error_docref(NULL, E_NOTICE, "%s", ZSTR_VAL(trimmed_message));
+		php_error_docref(NULL, E_NOTICE, "%pS", trimmed_message);
 	}
 
 	ZVAL_STR(&tmp, trimmed_message);
@@ -448,19 +445,14 @@ static int PQsocketPoll(int socket, int read, int write, time_t timeout)
 	if (!read && !write)
 		return 0;
 
-	php_pollfd fd;
-	int ts = -1;
-
-	fd.fd = socket;
-	fd.events = POLLERR;
-	fd.revents = 0;
+	int ts = -1, events = 0;
 
 	if (read) {
-		fd.events |= POLLIN;
+		events |= POLLIN;
 	}
 
 	if (write) {
-		fd.events |= POLLOUT;
+		events |= POLLOUT;
 	}
 
 	if (timeout != (time_t)ts) {
@@ -473,7 +465,7 @@ static int PQsocketPoll(int socket, int read, int write, time_t timeout)
 		}
 	}
 
-	return php_poll2(&fd, 1, ts);
+	return php_pollfd_for_ms(socket, events, ts);
 }
 #endif
 
@@ -702,7 +694,7 @@ static void php_pgsql_do_connect(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 				if (pgsql) {
 					PQfinish(pgsql);
 				}
-				php_error_docref(NULL, E_WARNING, "Unable to connect to PostgreSQL server: %s", ZSTR_VAL(msgbuf));
+				php_error_docref(NULL, E_WARNING, "Unable to connect to PostgreSQL server: %pS", msgbuf);
 				zend_string_release(msgbuf);
 				goto err;
 			}
@@ -788,7 +780,7 @@ static void php_pgsql_do_connect(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 				if (pgsql) {
 					PQfinish(pgsql);
 				}
-				php_error_docref(NULL, E_WARNING, "Unable to connect to PostgreSQL server: %s", ZSTR_VAL(msgbuf));
+				php_error_docref(NULL, E_WARNING, "Unable to connect to PostgreSQL server: %pS", msgbuf);
 				zend_string_release(msgbuf);
 				goto err;
 			}
@@ -799,7 +791,7 @@ static void php_pgsql_do_connect(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 				if (pgsql) {
 					PQfinish(pgsql);
 				}
-				php_error_docref(NULL, E_WARNING, "Unable to connect to PostgreSQL server: %s", ZSTR_VAL(msgbuf));
+				php_error_docref(NULL, E_WARNING, "Unable to connect to PostgreSQL server: %pS", msgbuf);
 				zend_string_release(msgbuf);
 				goto err;
 			}
@@ -914,7 +906,6 @@ PHP_FUNCTION(pg_close)
 #define PHP_PG_HOST 6
 #define PHP_PG_VERSION 7
 #define PHP_PG_JIT 8
-#define PHP_PG_SERVICE 9
 
 /* php_pgsql_get_link_info */
 static void php_pgsql_get_link_info(INTERNAL_FUNCTION_PARAMETERS, int entry_type)
@@ -999,12 +990,6 @@ static void php_pgsql_get_link_info(INTERNAL_FUNCTION_PARAMETERS, int entry_type
 			PQclear(res);
 			return;
 		}
-#if defined(HAVE_PG_SERVICE)
-		case PHP_PG_SERVICE: {
-			result = PQservice(pgsql);
-			break;
-		}
-#endif
 		default: ZEND_UNREACHABLE();
 	}
 	if (result) {
@@ -1060,13 +1045,6 @@ PHP_FUNCTION(pg_jit)
 {
 	php_pgsql_get_link_info(INTERNAL_FUNCTION_PARAM_PASSTHRU,PHP_PG_JIT);
 }
-
-#if defined(HAVE_PG_SERVICE)
-PHP_FUNCTION(pg_service)
-{
-	php_pgsql_get_link_info(INTERNAL_FUNCTION_PARAM_PASSTHRU,PHP_PG_SERVICE);
-}
-#endif
 
 /* Returns the value of a server parameter */
 PHP_FUNCTION(pg_parameter_status)
@@ -1239,7 +1217,7 @@ static char **php_pgsql_make_arguments(const HashTable *param_arr, int *num_para
 {
 	/* This conversion is safe because of the limit of number of elements in a table. */
 	*num_params = (int) zend_hash_num_elements(param_arr);
-	char **params = safe_emalloc(sizeof(char *), *num_params, 0);
+	char **params = safe_emalloc(*num_params, sizeof(char *), 0);
 	uint32_t i = 0;
 
 	ZEND_HASH_FOREACH_VAL(param_arr, zval *tmp) {
@@ -2154,8 +2132,8 @@ PHP_FUNCTION(pg_fetch_object)
 
 	if (UNEXPECTED(!constructor && ctor_params && zend_hash_num_elements(ctor_params) > 0)) {
 		zend_argument_value_error(4,
-			"must be empty when the specified class (%s) does not have a constructor",
-			ZSTR_VAL(ce->name)
+			"must be empty when the specified class (%pS) does not have a constructor",
+			ce->name
 		);
 		RETURN_THROWS();
 	}
@@ -2289,9 +2267,9 @@ static void php_pgsql_data_info(INTERNAL_FUNCTION_PARAMETERS, int entry_type, bo
 
 	if (ZEND_NUM_ARGS() == 2) {
 		if (nullable_row) {
-			zend_error(E_DEPRECATED, "Calling %s() with 2 arguments is deprecated, "
+			zend_error(E_DEPRECATED, "Calling %pS() with 2 arguments is deprecated, "
 				"use the 3-parameter signature with a null $row parameter instead",
-				ZSTR_VAL(EX(func)->common.function_name));
+				EX(func)->common.function_name);
 			if (UNEXPECTED(EG(exception))) {
 				RETURN_THROWS();
 			}
@@ -2836,7 +2814,7 @@ PHP_FUNCTION(pg_lo_write)
 
 	ZEND_PARSE_PARAMETERS_START(2, 3)
 		Z_PARAM_OBJECT_OF_CLASS(pgsql_id, pgsql_lob_ce)
-		Z_PARAM_PATH_STR(str)
+		Z_PARAM_STR(str)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_LONG_OR_NULL(z_len, z_len_is_null)
 	ZEND_PARSE_PARAMETERS_END();
@@ -3432,15 +3410,13 @@ static zend_result pgsql_copy_from_query(PGconn *pgsql, PGresult *pgsql_result, 
 	}
 
 	int result;
-	if (ZSTR_LEN(tmp) > 0 && ZSTR_VAL(tmp)[ZSTR_LEN(tmp) - 1] != '\n') {
-		char *zquery = emalloc(ZSTR_LEN(tmp) + 2);
-		memcpy(zquery, ZSTR_VAL(tmp), ZSTR_LEN(tmp));
-		zquery[ZSTR_LEN(tmp)] = '\n';
-		zquery[ZSTR_LEN(tmp) + 1] = '\0';
+	if (ZSTR_LEN(tmp) == 0 || zend_string_ends_with_literal(tmp, "\n")) {
+		result = PQputCopyData(pgsql, ZSTR_VAL(tmp), ZSTR_LEN(tmp));
+	} else {
+		char *zquery = zend_cstr_append_char(
+			ZSTR_VAL(tmp), ZSTR_LEN(tmp), '\n');
 		result = PQputCopyData(pgsql, zquery, ZSTR_LEN(tmp) + 1);
 		efree(zquery);
-	} else {
-		result = PQputCopyData(pgsql, ZSTR_VAL(tmp), ZSTR_LEN(tmp));
 	}
 
 	zend_tmp_string_release(tmp_tmp);
@@ -4441,6 +4417,7 @@ static int php_pgsql_fd_cast(php_stream *stream, int cast_as, void **ret) /* {{{
 
 	switch (cast_as)	{
 		case PHP_STREAM_AS_FD_FOR_SELECT:
+		case PHP_STREAM_AS_FD_FOR_POLL:
 		case PHP_STREAM_AS_FD:
 		case PHP_STREAM_AS_SOCKETD: {
 				int fd_number = PQsocket(pgsql);
@@ -4564,7 +4541,7 @@ PHP_PGSQL_API zend_result php_pgsql_meta_data(PGconn *pg_link, const zend_string
 	tmp_name = php_strtok_r(src, ".", &tmp_name2);
 	if (!tmp_name) {
 		efree(src);
-		zend_argument_value_error(2, "must be specified (%s)", ZSTR_VAL(table_name));
+		zend_argument_value_error(2, "must be specified (%pS)", table_name);
 		return FAILURE;
 	}
 	if (!tmp_name2 || !*tmp_name2) {
@@ -4593,10 +4570,10 @@ PHP_PGSQL_API zend_result php_pgsql_meta_data(PGconn *pg_link, const zend_string
 						  "WHERE a.attnum > 0 AND c.relname = '");
 	}
 	len = strlen(tmp_name2);
-	escaped = (char *)safe_emalloc(len, 2, 1);
+	escaped = (char *)safe_emalloc(len * 2, sizeof(char), 1);
 	new_len = PQescapeStringConn(pg_link, escaped, tmp_name2, len, &err);
 	if (err) {
-		php_error_docref(NULL, E_WARNING, "Escaping table name '%s' failed", ZSTR_VAL(table_name));
+		php_error_docref(NULL, E_WARNING, "Escaping table name '%pS' failed", table_name);
 		efree(src);
 		efree(escaped);
 		smart_str_free(&querystr);
@@ -4609,10 +4586,10 @@ PHP_PGSQL_API zend_result php_pgsql_meta_data(PGconn *pg_link, const zend_string
 
 	smart_str_appends(&querystr, "' AND n.nspname = '");
 	len = strlen(tmp_name);
-	escaped = (char *)safe_emalloc(len, 2, 1);
+	escaped = (char *)safe_emalloc(len * 2, sizeof(char), 1);
 	new_len = PQescapeStringConn(pg_link, escaped, tmp_name, len, &err);
 	if (err) {
-		php_error_docref(NULL, E_WARNING, "Escaping table namespace '%s' failed", ZSTR_VAL(table_name));
+		php_error_docref(NULL, E_WARNING, "Escaping table namespace '%pS' failed", table_name);
 		efree(src);
 		efree(escaped);
 		smart_str_free(&querystr);
@@ -4629,7 +4606,7 @@ PHP_PGSQL_API zend_result php_pgsql_meta_data(PGconn *pg_link, const zend_string
 
 	pg_result = PQexec(pg_link, ZSTR_VAL(querystr.s));
 	if (PQresultStatus(pg_result) != PGRES_TUPLES_OK || (num_rows = PQntuples(pg_result)) == 0) {
-		php_error_docref(NULL, E_WARNING, "Table '%s' doesn't exists", ZSTR_VAL(table_name));
+		php_error_docref(NULL, E_WARNING, "Table '%pS' doesn't exists", table_name);
 		smart_str_free(&querystr);
 		PQclear(pg_result);
 		return FAILURE;
@@ -4846,7 +4823,7 @@ static int php_pgsql_convert_match(const zend_string *str, zend_string *regex)
  */
 static zend_string *php_pgsql_add_quotes(zend_string *src)
 {
-	return zend_string_concat3("E'", strlen("E'"), ZSTR_VAL(src), ZSTR_LEN(src), "'", strlen("'"));
+	return zend_string_concat3("'", strlen("'"), ZSTR_VAL(src), ZSTR_LEN(src), "'", strlen("'"));
 }
 /* }}} */
 
@@ -4860,7 +4837,7 @@ static zend_string *php_pgsql_add_quotes(zend_string *src)
 		} \
 		/* raise error if it's not null and cannot be ignored */ \
 		else if (!(opt & PGSQL_CONV_IGNORE_NOT_NULL) && Z_TYPE_P(not_null) == IS_TRUE) { \
-			php_error_docref(NULL, E_NOTICE, "Detected NULL for 'NOT NULL' field '%s'", ZSTR_VAL(field)); \
+			php_error_docref(NULL, E_NOTICE, "Detected NULL for 'NOT NULL' field '%pS'", field); \
 			err = 1; \
 		} \
 	}
@@ -4904,7 +4881,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 		}
 
 		if (!err && (def = zend_hash_find(Z_ARRVAL(meta), field)) == NULL) {
-			php_error_docref(NULL, E_NOTICE, "Invalid field name (%s) in values", ZSTR_VAL(field));
+			php_error_docref(NULL, E_NOTICE, "Invalid field name (%pS) in values", field);
 			err = 1;
 		}
 		if (!err && (type = zend_hash_str_find(Z_ARRVAL_P(def), "type", sizeof("type") - 1)) == NULL) {
@@ -4962,7 +4939,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 								ZVAL_STRINGL(&new_val, "'f'", sizeof("'f'")-1);
 							}
 							else {
-								zend_value_error("%s(): Field \"%s\" must be of type bool, invalid PostgreSQL string boolean value \"%s\" given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(val));
+								zend_value_error("%s(): Field \"%pS\" must be of type bool, invalid PostgreSQL string boolean value \"%pS\" given", get_active_function_name(), field, Z_STR_P(val));
 								err = 1;
 							}
 						}
@@ -4994,7 +4971,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type string|null|int|bool, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type string|null|int|bool, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 
@@ -5036,7 +5013,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type int|null, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type int|null, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 
@@ -5081,7 +5058,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type %s|int|null, %s given", get_active_function_name(), (data_type == PG_MONEY ? "money" : "float"), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%s\" must be of type %pS|int|null, %pS given", get_active_function_name(), (data_type == PG_MONEY ? "money" : "float"), field, Z_STR_P(type));
 				}
 				break;
 
@@ -5117,7 +5094,6 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 							zend_string *str;
 							/* PostgreSQL ignores \0 */
 							str = zend_string_alloc(Z_STRLEN_P(val) * 2, 0);
-							/* better to use PGSQLescapeLiteral since PGescapeStringConn does not handle special \ */
 							ZSTR_LEN(str) = PQescapeStringConn(pg_link, ZSTR_VAL(str),
 									Z_STRVAL_P(val), Z_STRLEN_P(val), &escape_err);
 							if (escape_err) {
@@ -5149,11 +5125,11 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				if (err) {
 					if (escape_err) {
 						php_error_docref(NULL, E_NOTICE, 
-							"String value escaping failed for PostgreSQL '%s' (%s)",
-							Z_STRVAL_P(type), ZSTR_VAL(field));
+							"String value escaping failed for PostgreSQL '%pS' (%pS)",
+							Z_STR_P(type), field);
 					} else {
-						zend_type_error("%s(): Field \"%s\" must be of type string|null, %s given",
-							get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+						zend_type_error("%s(): Field \"%pS\" must be of type string|null, %pS given",
+							get_active_function_name(), field, Z_STR_P(type));
 					}
 				}
 				break;
@@ -5196,7 +5172,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type int|null, %s given", get_active_function_name(), ZSTR_VAL(field), zend_zval_value_name(val));
+					zend_type_error("%s(): Field \"%pS\" must be of type int|null, %s given", get_active_function_name(), field, zend_zval_value_name(val));
 				}
 				break;
 
@@ -5231,9 +5207,9 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
 					if (err == 2) {
-						zend_value_error("%s(): Field \"%s\" must be a valid IPv4 or IPv6 address string, \"%s\" given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(val));
+						zend_value_error("%s(): Field \"%pS\" must be a valid IPv4 or IPv6 address string, \"%pS\" given", get_active_function_name(), field, Z_STR_P(val));
 					} else {
-						zend_type_error("%s(): Field \"%s\" must be of type string|null, given %s", get_active_function_name(), ZSTR_VAL(field), zend_zval_value_name(val));
+						zend_type_error("%s(): Field \"%pS\" must be of type string|null, given %s", get_active_function_name(), field, zend_zval_value_name(val));
 					}
 				}
 				break;
@@ -5266,7 +5242,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type string|null, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type string|null, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 
@@ -5296,7 +5272,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type string|null, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type string|null, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 
@@ -5326,7 +5302,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type string|null, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type string|null, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 
@@ -5373,7 +5349,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type string|null, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type string|null, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 			case PG_BYTEA:
@@ -5389,7 +5365,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 
 							tmp = PQescapeByteaConn(pg_link, (unsigned char *)Z_STRVAL_P(val), Z_STRLEN_P(val), &to_len);
 							if (tmp == NULL) {
-								php_error_docref(NULL, E_NOTICE, "Escaping value failed for %s field (%s)", Z_STRVAL_P(type), ZSTR_VAL(field));
+								php_error_docref(NULL, E_NOTICE, "Escaping value failed for %pS field (%pS)", Z_STR_P(type), field);
 								err = 1;
 								break;
 							}
@@ -5419,7 +5395,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type string|null, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type string|null, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 
@@ -5448,13 +5424,13 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				}
 				PGSQL_CONV_CHECK_IGNORE();
 				if (err) {
-					zend_type_error("%s(): Field \"%s\" must be of type string|null, %s given", get_active_function_name(), ZSTR_VAL(field), Z_STRVAL_P(type));
+					zend_type_error("%s(): Field \"%pS\" must be of type string|null, %pS given", get_active_function_name(), field, Z_STR_P(type));
 				}
 				break;
 
 			default:
 				/* should not happen */
-				php_error_docref(NULL, E_NOTICE, "Unknown or system data type '%s' for '%s'. Report error", Z_STRVAL_P(type), ZSTR_VAL(field));
+				php_error_docref(NULL, E_NOTICE, "Unknown or system data type '%pS' for '%pS'. Report error", Z_STR_P(type), field);
 				err = 1;
 				break;
 		} /* switch */
@@ -5471,7 +5447,7 @@ PHP_PGSQL_API zend_result php_pgsql_convert(PGconn *pg_link, const zend_string *
 				char *escaped = PQescapeIdentifier(pg_link, ZSTR_VAL(field), ZSTR_LEN(field));
 				if (escaped == NULL) {
 					/* This cannot fail because of invalid string but only due to failed memory allocation */
-					php_error_docref(NULL, E_NOTICE, "Escaping field '%s' failed", ZSTR_VAL(field));
+					php_error_docref(NULL, E_NOTICE, "Escaping field '%pS' failed", field);
 					err = 1;
 					break;
 				}
@@ -5568,7 +5544,7 @@ static inline zend_result build_tablename(smart_str *querystr, PGconn *pg_link, 
 	} else {
 		char *escaped = PQescapeIdentifier(pg_link, ZSTR_VAL(table), len);
 		if (escaped == NULL) {
-			php_error_docref(NULL, E_NOTICE, "Failed to escape table name '%s'", ZSTR_VAL(table));
+			php_error_docref(NULL, E_NOTICE, "Failed to escape table name '%pS'", table);
 			return FAILURE;
 		}
 		smart_str_appends(querystr, escaped);
@@ -5584,7 +5560,7 @@ static inline zend_result build_tablename(smart_str *querystr, PGconn *pg_link, 
 		} else {
 			char *escaped = PQescapeIdentifier(pg_link, after_dot, len);
 			if (escaped == NULL) {
-				php_error_docref(NULL, E_NOTICE, "Failed to escape table name '%s'", ZSTR_VAL(table));
+				php_error_docref(NULL, E_NOTICE, "Failed to escape table name '%pS'", table);
 				return FAILURE;
 			}
 			smart_str_appendc(querystr, '.');
@@ -5644,7 +5620,7 @@ PHP_PGSQL_API zend_result php_pgsql_insert(PGconn *pg_link, const zend_string *t
 		if (opt & PGSQL_DML_ESCAPE) {
 			tmp = PQescapeIdentifier(pg_link, ZSTR_VAL(fld), ZSTR_LEN(fld));
 			if (tmp == NULL) {
-				php_error_docref(NULL, E_NOTICE, "Failed to escape field '%s'", ZSTR_VAL(fld));
+				php_error_docref(NULL, E_NOTICE, "Failed to escape field '%pS'", fld);
 				goto cleanup;
 			}
 			smart_str_appends(&querystr, tmp);
@@ -5664,10 +5640,10 @@ PHP_PGSQL_API zend_result php_pgsql_insert(PGconn *pg_link, const zend_string *t
 			case IS_STRING:
 				if (opt & PGSQL_DML_ESCAPE) {
 					int error;
-					char *tmp = safe_emalloc(Z_STRLEN_P(val), 2, 1);
+					char *tmp = safe_emalloc(Z_STRLEN_P(val) * 2, sizeof(char), 1);
 					size_t new_len = PQescapeStringConn(pg_link, tmp, Z_STRVAL_P(val), Z_STRLEN_P(val), &error);
 					if (error) {
-						php_error_docref(NULL, E_NOTICE, "Failed to escape field '%s' value", ZSTR_VAL(fld));
+						php_error_docref(NULL, E_NOTICE, "Failed to escape field '%pS' value", fld);
 						efree(tmp);
 						goto cleanup;
 					}
@@ -5748,8 +5724,9 @@ PHP_FUNCTION(pg_insert)
 	}
 
 	if (option & ~(PGSQL_CONV_OPTS|PGSQL_DML_NO_CONV|PGSQL_DML_EXEC|PGSQL_DML_ASYNC|PGSQL_DML_STRING|PGSQL_DML_ESCAPE)) {
-		zend_argument_value_error(4, "must be a valid bit mask of PGSQL_CONV_FORCE_NULL, PGSQL_DML_NO_CONV, "
-			"PGSQL_DML_ESCAPE, PGSQL_DML_EXEC, PGSQL_DML_ASYNC, and PGSQL_DML_STRING");
+		zend_argument_value_error(4, "must be a valid bit mask of PGSQL_CONV_IGNORE_DEFAULT, PGSQL_CONV_FORCE_NULL, "
+			"PGSQL_CONV_IGNORE_NOT_NULL, PGSQL_DML_NO_CONV, PGSQL_DML_ESCAPE, PGSQL_DML_EXEC, PGSQL_DML_ASYNC, "
+			"and PGSQL_DML_STRING");
 		RETURN_THROWS();
 	}
 
@@ -5828,7 +5805,7 @@ static inline int build_assignment_string(PGconn *pg_link, smart_str *querystr, 
 		if (opt & PGSQL_DML_ESCAPE) {
 			char *tmp = PQescapeIdentifier(pg_link, ZSTR_VAL(fld), ZSTR_LEN(fld));
 			if (tmp == NULL) {
-				php_error_docref(NULL, E_NOTICE, "Failed to escape field '%s'", ZSTR_VAL(fld));
+				php_error_docref(NULL, E_NOTICE, "Failed to escape field '%pS'", fld);
 				return -1;
 			}
 			smart_str_appends(querystr, tmp);
@@ -5847,10 +5824,10 @@ static inline int build_assignment_string(PGconn *pg_link, smart_str *querystr, 
 			case IS_STRING:
 				if (opt & PGSQL_DML_ESCAPE) {
 					int error;
-					char *tmp = (char *)safe_emalloc(Z_STRLEN_P(val), 2, 1);
+					char *tmp = (char *)safe_emalloc(Z_STRLEN_P(val) * 2, sizeof(char), 1);
 					size_t new_len = PQescapeStringConn(pg_link, tmp, Z_STRVAL_P(val), Z_STRLEN_P(val), &error);
 					if (error) {
-						php_error_docref(NULL, E_NOTICE, "Failed to escape field '%s' value", ZSTR_VAL(fld));
+						php_error_docref(NULL, E_NOTICE, "Failed to escape field '%pS' value", fld);
 						efree(tmp);
 						return -1;
 					}
@@ -5980,8 +5957,9 @@ PHP_FUNCTION(pg_update)
 	}
 
 	if (option & ~(PGSQL_CONV_OPTS|PGSQL_DML_NO_CONV|PGSQL_DML_EXEC|PGSQL_DML_STRING|PGSQL_DML_ESCAPE)) {
-		zend_argument_value_error(5, "must be a valid bit mask of PGSQL_CONV_FORCE_NULL, PGSQL_DML_NO_CONV, "
-			"PGSQL_DML_ESCAPE, PGSQL_DML_EXEC, PGSQL_DML_ASYNC, and PGSQL_DML_STRING");
+		zend_argument_value_error(5, "must be a valid bit mask of PGSQL_CONV_IGNORE_DEFAULT, PGSQL_CONV_FORCE_NULL, "
+			"PGSQL_CONV_IGNORE_NOT_NULL, PGSQL_DML_NO_CONV, PGSQL_DML_ESCAPE, PGSQL_DML_EXEC, "
+			"and PGSQL_DML_STRING");
 		RETURN_THROWS();
 	}
 
@@ -6012,7 +5990,7 @@ PHP_PGSQL_API zend_result php_pgsql_delete(PGconn *pg_link, const zend_string *t
 	ZEND_ASSERT(pg_link != NULL);
 	ZEND_ASSERT(table != NULL);
 	ZEND_ASSERT(Z_TYPE_P(ids_array) == IS_ARRAY);
-	ZEND_ASSERT(!(opt & ~(PGSQL_CONV_FORCE_NULL|PGSQL_DML_EXEC|PGSQL_DML_STRING|PGSQL_DML_ESCAPE)));
+	ZEND_ASSERT(!(opt & ~(PGSQL_CONV_FORCE_NULL|PGSQL_DML_NO_CONV|PGSQL_DML_EXEC|PGSQL_DML_STRING|PGSQL_DML_ESCAPE)));
 
 	if (zend_hash_num_elements(Z_ARRVAL_P(ids_array)) == 0) {
 		return FAILURE;
@@ -6082,7 +6060,7 @@ PHP_FUNCTION(pg_delete)
 
 	if (option & ~(PGSQL_CONV_FORCE_NULL|PGSQL_DML_NO_CONV|PGSQL_DML_EXEC|PGSQL_DML_STRING|PGSQL_DML_ESCAPE)) {
 		zend_argument_value_error(4, "must be a valid bit mask of PGSQL_CONV_FORCE_NULL, PGSQL_DML_NO_CONV, "
-			"PGSQL_DML_ESCAPE, PGSQL_DML_EXEC, PGSQL_DML_ASYNC, and PGSQL_DML_STRING");
+			"PGSQL_DML_ESCAPE, PGSQL_DML_EXEC, and PGSQL_DML_STRING");
 		RETURN_THROWS();
 	}
 
@@ -6193,7 +6171,7 @@ PHP_PGSQL_API zend_result php_pgsql_select(PGconn *pg_link, const zend_string *t
 		php_pgsql_result2array(pg_result, ret_array, result_type);
 		ret = SUCCESS;
 	} else {
-		php_error_docref(NULL, E_NOTICE, "Failed to execute '%s'", ZSTR_VAL(querystr.s));
+		php_error_docref(NULL, E_NOTICE, "Failed to execute '%pS'", querystr.s);
 	}
 	PQclear(pg_result);
 

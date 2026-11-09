@@ -232,7 +232,7 @@ ZEND_API int ZEND_FASTCALL zend_atoi(const char *str, size_t str_len)
 	ZVAL_UNDEF(dst);																		\
 	if (Z_OBJ_HT_P(op)->cast_object(Z_OBJ_P(op), dst, ctype) == FAILURE) {					\
 		zend_error(E_WARNING,																\
-			"Object of class %s could not be converted to %s", ZSTR_VAL(Z_OBJCE_P(op)->name),\
+			"Object of class %pS could not be converted to %s", Z_OBJCE_P(op)->name,        \
 		zend_get_type_by_const(ctype));														\
 	} 																						\
 
@@ -448,7 +448,6 @@ try_again:
 				ZEND_ASSERT(Z_TYPE(dst) == IS_LONG);
 				return Z_LVAL(dst);
 			}
-		case IS_UNDEF:
 		case IS_RESOURCE:
 		case IS_ARRAY:
 			*failed = true;
@@ -796,7 +795,7 @@ try_again:
 				return;
 			}
 			if (!EG(exception)) {
-				zend_throw_error(NULL, "Object of class %s could not be converted to string", ZSTR_VAL(Z_OBJCE_P(op)->name));
+				zend_throw_error(NULL, "Object of class %pS could not be converted to string", Z_OBJCE_P(op)->name);
 			}
 			zval_ptr_dtor(op);
 			ZVAL_EMPTY_STRING(op);
@@ -934,7 +933,7 @@ ZEND_API void ZEND_COLD zend_incompatible_double_to_long_error(double d)
 }
 ZEND_API void ZEND_COLD zend_incompatible_string_to_long_error(const zend_string *s)
 {
-	zend_error(E_DEPRECATED, "Implicit conversion from float-string \"%s\" to int loses precision", ZSTR_VAL(s));
+	zend_error(E_DEPRECATED, "Implicit conversion from float-string \"%pS\" to int loses precision", s);
 }
 ZEND_API void ZEND_COLD zend_oob_double_to_long_error(double d)
 {
@@ -942,7 +941,7 @@ ZEND_API void ZEND_COLD zend_oob_double_to_long_error(double d)
 }
 ZEND_API void ZEND_COLD zend_oob_string_to_long_error(const zend_string *s)
 {
-	zend_error_unchecked(E_WARNING, "The float-string \"%s\" is not representable as an int, cast occurred", ZSTR_VAL(s));
+	zend_error(E_WARNING, "The float-string \"%pS\" is not representable as an int, cast occurred", s);
 }
 
 ZEND_API void ZEND_COLD zend_nan_coerced_to_type_warning(uint8_t type)
@@ -1059,6 +1058,77 @@ try_again:
 }
 /* }}} */
 
+/*
+ * Strings use zval_try_get_long() numeric-string semantics. If *failed is true,
+ * the return value must not be used and an exception may be pending. The input
+ * must not be IS_UNDEF.
+ */
+ZEND_API double ZEND_FASTCALL zval_try_get_double_func(const zval *op, bool *failed)
+{
+	*failed = false;
+try_again:
+	switch (Z_TYPE_P(op)) {
+		case IS_NULL:
+		case IS_FALSE:
+			return 0.0;
+		case IS_TRUE:
+			return 1.0;
+		case IS_LONG:
+			return (double) Z_LVAL_P(op);
+		case IS_DOUBLE:
+			return Z_DVAL_P(op);
+		case IS_STRING:
+			{
+				uint8_t type;
+				zend_long lval;
+				double dval;
+				double result;
+				bool trailing_data = false;
+
+				type = is_numeric_string_ex(Z_STRVAL_P(op), Z_STRLEN_P(op), &lval, &dval,
+					/* allow errors */ true, NULL, &trailing_data);
+				if (type == 0) {
+					*failed = true;
+					return 0.0;
+				}
+				if (type == IS_DOUBLE) {
+					result = dval;
+				} else if (UNEXPECTED(lval == 0)) {
+					result = zend_strtod(Z_STRVAL_P(op), NULL);
+				} else {
+					result = (double) lval;
+				}
+				if (UNEXPECTED(trailing_data)) {
+					zend_error(E_WARNING, "A non-numeric value encountered");
+					if (UNEXPECTED(EG(exception))) {
+						*failed = true;
+						return 0.0;
+					}
+				}
+				return result;
+			}
+		case IS_OBJECT:
+			{
+				zval dst;
+				if (Z_OBJ_HT_P(op)->cast_object(Z_OBJ_P(op), &dst, IS_DOUBLE) == FAILURE
+						|| EG(exception)) {
+					*failed = true;
+					return 0.0;
+				}
+				ZEND_ASSERT(Z_TYPE(dst) == IS_DOUBLE);
+				return Z_DVAL(dst);
+			}
+		case IS_RESOURCE:
+		case IS_ARRAY:
+			*failed = true;
+			return 0.0;
+		case IS_REFERENCE:
+			op = Z_REFVAL_P(op);
+			goto try_again;
+		default: ZEND_UNREACHABLE();
+	}
+}
+
 static zend_always_inline zend_string* __zval_get_string_func(const zval *op, bool try) /* {{{ */
 {
 try_again:
@@ -1085,7 +1155,7 @@ try_again:
 				return Z_STR(tmp);
 			}
 			if (!EG(exception)) {
-				zend_throw_error(NULL, "Object of class %s could not be converted to string", ZSTR_VAL(Z_OBJCE_P(op)->name));
+				zend_throw_error(NULL, "Object of class %pS could not be converted to string", Z_OBJCE_P(op)->name);
 			}
 			return try ? NULL : ZSTR_EMPTY_ALLOC();
 		}
@@ -2248,7 +2318,9 @@ ZEND_API int ZEND_FASTCALL numeric_compare_function(const zval *op1, const zval 
 
 ZEND_API zend_result ZEND_FASTCALL compare_function(zval *result, zval *op1, zval *op2) /* {{{ */
 {
-	ZVAL_LONG(result, zend_compare(op1, op2));
+	int rv = zend_compare(op1, op2);
+	ZEND_ASSERT(-1 <= rv && rv <= 1);
+	ZVAL_LONG(result, rv);
 	return SUCCESS;
 }
 /* }}} */
@@ -2911,7 +2983,7 @@ ZEND_API bool ZEND_FASTCALL zend_object_is_true(const zval *op) /* {{{ */
 	if (zobj->handlers->cast_object(zobj, &tmp, _IS_BOOL) == SUCCESS) {
 		return Z_TYPE(tmp) == IS_TRUE;
 	}
-	zend_error(E_RECOVERABLE_ERROR, "Object of class %s could not be converted to bool", ZSTR_VAL(zobj->ce->name));
+	zend_error(E_RECOVERABLE_ERROR, "Object of class %pS could not be converted to bool", zobj->ce->name);
 	return false;
 }
 /* }}} */
@@ -3138,7 +3210,7 @@ ZEND_API char* ZEND_FASTCALL zend_str_toupper_dup_ex(const char *source, size_t 
 }
 /* }}} */
 
-ZEND_API zend_string* ZEND_FASTCALL zend_string_tolower_ex(zend_string *str, bool persistent) /* {{{ */
+static zend_always_inline zend_string* ZEND_FASTCALL _zend_string_ftolower_ex(zend_string *str, bool persistent, bool fallible)
 {
 	size_t length = ZSTR_LEN(str);
 	unsigned char *p = (unsigned char *) ZSTR_VAL(str);
@@ -3149,7 +3221,10 @@ ZEND_API zend_string* ZEND_FASTCALL zend_string_tolower_ex(zend_string *str, boo
 	while (p + BLOCKCONV_STRIDE <= end) {
 		BLOCKCONV_LOAD(p);
 		if (BLOCKCONV_FOUND()) {
-			zend_string *res = zend_string_alloc(length, persistent);
+			zend_string *res = zend_string_falloc(length, persistent, fallible);
+			if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!res)) {
+				return NULL;
+			}
 			memcpy(ZSTR_VAL(res), ZSTR_VAL(str), p - (unsigned char *) ZSTR_VAL(str));
 			unsigned char *q = (unsigned char*) ZSTR_VAL(res) + (p - (unsigned char*) ZSTR_VAL(str));
 
@@ -3170,7 +3245,10 @@ ZEND_API zend_string* ZEND_FASTCALL zend_string_tolower_ex(zend_string *str, boo
 
 	while (p < end) {
 		if (*p != zend_tolower_ascii(*p)) {
-			zend_string *res = zend_string_alloc(length, persistent);
+			zend_string *res = zend_string_falloc(length, persistent, fallible);
+			if (ZEND_CONST_COND(fallible, true) && UNEXPECTED(!res)) {
+				return NULL;
+			}
 			memcpy(ZSTR_VAL(res), ZSTR_VAL(str), p - (unsigned char*) ZSTR_VAL(str));
 
 			unsigned char *q = (unsigned char*) ZSTR_VAL(res) + (p - (unsigned char*) ZSTR_VAL(str));
@@ -3185,7 +3263,17 @@ ZEND_API zend_string* ZEND_FASTCALL zend_string_tolower_ex(zend_string *str, boo
 
 	return zend_string_copy(str);
 }
+
+ZEND_API zend_string* ZEND_FASTCALL zend_string_tolower_ex(zend_string *str, bool persistent) /* {{{ */
+{
+	return _zend_string_ftolower_ex(str, persistent, /* fallible */ false);
+}
 /* }}} */
+
+ZEND_API zend_string* ZEND_FASTCALL zend_string_ftolower_ex(zend_string *str, bool persistent)
+{
+	return _zend_string_ftolower_ex(str, persistent, /* fallible */ true);
+}
 
 ZEND_API zend_string* ZEND_FASTCALL zend_string_toupper_ex(zend_string *str, bool persistent) /* {{{ */
 {

@@ -1,5 +1,8 @@
 /* This is a generated file, edit php_intl.stub.php instead.
- * Stub hash: f94e7c9cc372878f1f8bd0e948092ea72076e687 */
+ * Stub hash: 53be664062cb2b55770f3493e201c0401c9ef519 */
+
+#include "zend_attributes.h"
+#include "zend_constants.h"
 
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_intlcal_create_instance, 0, 0, IntlCalendar, 1)
 	ZEND_ARG_OBJ_TYPE_MASK(0, timezone, IntlTimeZone|DateTimeZone, MAY_BE_STRING|MAY_BE_NULL, "null")
@@ -249,13 +252,15 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_collator_get_locale, 0, 2, MAY_B
 	ZEND_ARG_TYPE_INFO(0, type, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_collator_get_rules, 0, 1, MAY_BE_STRING|MAY_BE_FALSE)
+	ZEND_ARG_OBJ_INFO(0, object, Collator, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_collator_get_error_code, 0, 1, MAY_BE_LONG|MAY_BE_FALSE)
 	ZEND_ARG_OBJ_INFO(0, object, Collator, 0)
 ZEND_END_ARG_INFO()
 
-ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_collator_get_error_message, 0, 1, MAY_BE_STRING|MAY_BE_FALSE)
-	ZEND_ARG_OBJ_INFO(0, object, Collator, 0)
-ZEND_END_ARG_INFO()
+#define arginfo_collator_get_error_message arginfo_collator_get_rules
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_collator_get_sort_key, 0, 2, MAY_BE_STRING|MAY_BE_FALSE)
 	ZEND_ARG_OBJ_INFO(0, object, Collator, 0)
@@ -591,6 +596,7 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_locale_accept_from_http, 0, 1, MAY_BE_STRING|MAY_BE_FALSE)
 	ZEND_ARG_TYPE_INFO(0, header, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, availableLocales, IS_ARRAY, 1, "null")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_locale_is_right_to_left, 0, 1, _IS_BOOL, 0)
@@ -810,6 +816,11 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_transliterator_create_inverse, 0,
 	ZEND_ARG_OBJ_INFO(0, transliterator, Transliterator, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_transliterator_to_rules, 0, 1, MAY_BE_STRING|MAY_BE_FALSE)
+	ZEND_ARG_OBJ_INFO(0, transliterator, Transliterator, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, escapeUnprintable, _IS_BOOL, 0, "false")
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_transliterator_transliterate, 0, 2, MAY_BE_STRING|MAY_BE_FALSE)
 	ZEND_ARG_OBJ_TYPE_MASK(0, transliterator, Transliterator, MAY_BE_STRING, NULL)
 	ZEND_ARG_TYPE_INFO(0, string, IS_STRING, 0)
@@ -884,6 +895,7 @@ ZEND_FUNCTION(collator_sort);
 ZEND_FUNCTION(collator_sort_with_sort_keys);
 ZEND_FUNCTION(collator_asort);
 ZEND_FUNCTION(collator_get_locale);
+ZEND_FUNCTION(collator_get_rules);
 ZEND_FUNCTION(collator_get_error_code);
 ZEND_FUNCTION(collator_get_error_message);
 ZEND_FUNCTION(collator_get_sort_key);
@@ -1014,6 +1026,7 @@ ZEND_FUNCTION(transliterator_create);
 ZEND_FUNCTION(transliterator_create_from_rules);
 ZEND_FUNCTION(transliterator_list_ids);
 ZEND_FUNCTION(transliterator_create_inverse);
+ZEND_FUNCTION(transliterator_to_rules);
 ZEND_FUNCTION(transliterator_transliterate);
 ZEND_FUNCTION(transliterator_get_error_code);
 ZEND_FUNCTION(transliterator_get_error_message);
@@ -1078,6 +1091,7 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_FE(collator_sort_with_sort_keys, arginfo_collator_sort_with_sort_keys)
 	ZEND_FE(collator_asort, arginfo_collator_asort)
 	ZEND_FE(collator_get_locale, arginfo_collator_get_locale)
+	ZEND_FE(collator_get_rules, arginfo_collator_get_rules)
 	ZEND_FE(collator_get_error_code, arginfo_collator_get_error_code)
 	ZEND_FE(collator_get_error_message, arginfo_collator_get_error_message)
 	ZEND_FE(collator_get_sort_key, arginfo_collator_get_sort_key)
@@ -1208,6 +1222,7 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_FE(transliterator_create_from_rules, arginfo_transliterator_create_from_rules)
 	ZEND_FE(transliterator_list_ids, arginfo_transliterator_list_ids)
 	ZEND_FE(transliterator_create_inverse, arginfo_transliterator_create_inverse)
+	ZEND_FE(transliterator_to_rules, arginfo_transliterator_to_rules)
 	ZEND_FE(transliterator_transliterate, arginfo_transliterator_transliterate)
 	ZEND_FE(transliterator_get_error_code, arginfo_transliterator_get_error_code)
 	ZEND_FE(transliterator_get_error_message, arginfo_transliterator_get_error_message)

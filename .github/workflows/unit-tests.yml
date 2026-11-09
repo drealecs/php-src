@@ -3,6 +3,8 @@ on:
   push:
     paths:
       - 'main/network.c'
+      - 'main/io/**'
+      - 'main/php_io.h'
       - 'tests/unit/**'
       - '.github/workflows/unit-tests.yml'
     branches:
@@ -10,6 +12,8 @@ on:
   pull_request:
     paths:
       - 'main/network.c'
+      - 'main/io/**'
+      - 'main/php_io.h'
       - 'tests/unit/**'
       - '.github/workflows/unit-tests.yml'
     branches:
@@ -35,7 +39,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: git checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         
       - name: Install dependencies
         run: |

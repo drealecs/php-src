@@ -39,7 +39,7 @@ What do you write phpt tests on?
    If you want more guidance than that you can always ask the PHP Quality Assurance Team on their
    mailing list (php-qa@lists.php.net) where they would like you to direct your attentions.
 
-How is a phpt test is used?
+How is a phpt test used?
 
    When a test is called by the ``run-tests.php`` script it takes various parts of the phpt file to
    name and create a .php file. That .php file is then executed. The output of the .php file is then
@@ -192,6 +192,11 @@ When you are testing your test case it's really important to make sure that you 
 temporary resources (eg files) that you used in the test. There is a special ``--CLEAN--`` section
 to help you do this — see `here <#clean>`_.
 
+Tests run in parallel by default. Mutable resources such as files, directories, ports, database
+objects, and IPC identifiers must therefore be unique to each test. Read-only fixtures may be
+shared. If a resource cannot be isolated, declare the narrowest applicable conflict using
+``--CONFLICTS--`` or a ``CONFLICTS`` file.
+
 Another good check is to look at what lines of code in the PHP source your test case covers. This is
 easy to do, there are some instructions on the `PHP Wiki
 <https://wiki.php.net/doc/articles/writing-tests>`_.
@@ -237,8 +242,8 @@ and not in the INI section. This is because of the order in which settings are c
 
 If a TZ environmental variable is found the INI setting will be ignored.
 
-Tests that run, or only have have matching EXPECT output, on 32bit platforms can use a SKIPIF
-section like:
+Tests that run, or only have matching EXPECT output, on 32bit platforms can use a SKIPIF section
+like:
 
 .. code:: php
 
@@ -454,7 +459,7 @@ When creating temporary files it is a good idea to use an extension that indicat
 file, eg .tmp. It's also a good idea to avoid using extensions that are already used for other
 purposes, eg .inc, .php. Similarly, it is helpful to give the temporary file a name that is clearly
 related to the test case. For example, mytest.phpt should create mytest.tmp (or mytestN.tmp, N=1,
-2,3,...) then if by any chance the temporary file isnt't removed properly it will be obvious which
+2,3,...) then if by any chance the temporary file isn't removed properly it will be obvious which
 test case created it.
 
 When writing and debugging a test case with a ``--CLEAN--`` section it is helpful to remember that
@@ -591,9 +596,10 @@ Example 1 (full): :ref:`sample001.phpt`
 on the first line. If the test was part of a TestFest event, then # followed by the name of the
 event and the date (YYYY-MM-DD) on the second line.
 
-**Required:** No. For newly created tests this section should no longer be included, as test
-authorship is already accurately tracked by Git. If multiple authors should be credited, the
-`Co-authored-by` tag in the commit message may be used.
+**Required:** No. For newly created tests the section should no longer be used for simple authorship
+claims or listing all contributors who edited the test; as it is already accurately tracked by Git.
+It may be used if more specific attribution is useful, for example to credit the original reporter
+of a bug or a contributor who is not credited via `Co-authored-by` tag.
 
 **Format:** Name Email [Event]
 
@@ -1619,7 +1625,7 @@ section just stating a filename where to load the expected output from.
 
 **Description:** Code that is executed after a test completes. It's main purpose is to allow you to
 clean up after yourself. You might need to remove files created during the test or close sockets or
-database connections following a test. Infact, even if a test fails or encounters a fatal error
+database connections following a test. In fact, even if a test fails or encounters a fatal error
 during the test, the code found in the ``--CLEAN--`` section will still run.
 
 Code in the clean section is run in a completely different process than the one the test was run in.

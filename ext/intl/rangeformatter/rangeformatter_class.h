@@ -15,9 +15,8 @@
 #ifndef RANGEFORMATTER_CLASS_H
 #define RANGEFORMATTER_CLASS_H
 
-#include <unicode/numberrangeformatter.h>
-
 #ifdef __cplusplus
+#include <unicode/numberrangeformatter.h>
 using icu::number::LocalizedNumberRangeFormatter;
 #else
 typedef void LocalizedNumberRangeFormatter;
@@ -45,7 +44,8 @@ typedef struct {
 
 #define RANGEFORMATTER_OBJECT(nfo) (nfo)->nrf_data.unumrf
 
-
+BEGIN_EXTERN_C()
 void rangeformatter_register_class(void);
+END_EXTERN_C()
 
 #endif

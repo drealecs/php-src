@@ -54,7 +54,6 @@ if test "$PHP_MYSQLND" != "no" || test "$PHP_MYSQLND_ENABLED" = "yes"; then
     mysqlnd_read_buffer.c
     mysqlnd_result_meta.c
     mysqlnd_result.c
-    mysqlnd_reverse_api.c
     mysqlnd_statistics.c
     mysqlnd_vio.c
     mysqlnd_wireprotocol.c
@@ -69,6 +68,29 @@ if test "$PHP_MYSQLND" != "no" || test "$PHP_MYSQLND_ENABLED" = "yes"; then
         [Define to 1 if mysqlnd extended SSL is enabled through a system library.])
       PHP_ADD_EXTENSION_DEP(mysqlnd, hash)
     ])])
+
+  dnl The statistics are 64-bit atomics in ZTS builds, which some 32-bit targets
+  dnl implement in libatomic.
+  AS_VAR_IF([PHP_THREAD_SAFETY], [yes], [
+    AC_CACHE_CHECK([for the library of 64-bit atomic operations],
+      [php_cv_lib_atomic_u64],
+      [php_cv_lib_atomic_u64=no
+      for php_lib in "" -latomic; do
+        php_save_LIBS=$LIBS
+        LIBS="$LIBS $php_lib"
+        AC_LINK_IFELSE([AC_LANG_PROGRAM([
+          #include <stdatomic.h>
+          #include <stdint.h>
+          atomic_uint_least64_t value;
+        ], [return (int) atomic_fetch_add_explicit(&value, 1, memory_order_relaxed);])],
+          [php_cv_lib_atomic_u64=${php_lib:-none required}])
+        LIBS=$php_save_LIBS
+        AS_VAR_IF([php_cv_lib_atomic_u64], [no],, [break])
+      done])
+    AS_CASE([$php_cv_lib_atomic_u64],
+      [no], [AC_MSG_FAILURE([64-bit atomic operations are not available.])],
+      [-latomic], [PHP_ADD_LIBRARY([atomic],, [MYSQLND_SHARED_LIBADD])])
+  ])
 
   PHP_INSTALL_HEADERS([ext/mysqlnd/])
   PHP_SUBST([MYSQLND_SHARED_LIBADD])

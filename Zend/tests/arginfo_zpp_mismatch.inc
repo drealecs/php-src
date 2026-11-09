@@ -10,6 +10,7 @@ function skipFunction($function): bool {
      || $function === 'exit'
      || $function === 'die'
      || $function === 'zend_trigger_bailout'
+     || $function === 'zend_test_serialization_bailout'
         /* intentionally violate invariants */
      || $function === 'zend_create_unterminated_string'
      || $function === 'zend_test_array_return'
@@ -19,6 +20,7 @@ function skipFunction($function): bool {
      || (is_string($function) && str_starts_with($function, 'ob_'))
      || $function === 'output_add_rewrite_var'
      || $function === 'error_log'
+     || $function === 'syslog'
         /* may spend a lot of time waiting for connection timeouts */
      || (is_string($function) && str_contains($function, 'connect'))
      || (is_string($function) && str_starts_with($function, 'snmp'))

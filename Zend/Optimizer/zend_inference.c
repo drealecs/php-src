@@ -737,7 +737,7 @@ static inline bool zend_abs_range(
 		zend_long min, zend_long max, zend_long *abs_min, zend_long *abs_max) {
 	if (min == ZEND_LONG_MIN) {
 		/* Cannot take absolute value of LONG_MIN  */
-		return 0;
+		return false;
 	}
 
 	if (min >= 0) {
@@ -752,7 +752,7 @@ static inline bool zend_abs_range(
 		*abs_max = MAX(max, -min);
 	}
 
-	return 1;
+	return true;
 }
 
 static inline zend_long safe_shift_left(zend_long n, zend_long s) {
@@ -760,12 +760,14 @@ static inline zend_long safe_shift_left(zend_long n, zend_long s) {
 }
 
 static inline bool shift_left_overflows(zend_long n, zend_long s) {
-	/* This considers shifts that shift in the sign bit to be overflowing as well */
-	if (n >= 0) {
-		return s >= SIZEOF_ZEND_LONG * 8 - 1 || safe_shift_left(n, s) < n;
-	} else {
-		return s >= SIZEOF_ZEND_LONG * 8 || safe_shift_left(n, s) > n;
+	if (UNEXPECTED((zend_ulong)s >= SIZEOF_ZEND_LONG * 8)) {
+		return true;
 	}
+	if (UNEXPECTED(s == SIZEOF_ZEND_LONG * 8 - 1)) {
+		return n != 0 && n != -1;
+	}
+	zend_long shifted = (zend_long)((zend_ulong)n << (zend_ulong)s);
+	return (shifted >> s) != n;
 }
 
 /* If b does not divide a exactly, return the two adjacent values between which the real result
@@ -809,7 +811,7 @@ static bool zend_inference_calc_binary_op_range(
 				} else {
 					tmp->max = op1_max + op2_max;
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_SUB:
@@ -834,7 +836,7 @@ static bool zend_inference_calc_binary_op_range(
 				} else {
 					tmp->max = op1_max - op2_min;
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_MUL:
@@ -867,7 +869,7 @@ static bool zend_inference_calc_binary_op_range(
 					tmp->min = MIN(MIN(t1, t2), MIN(t3, t4));
 					tmp->max = MAX(MAX(t1, t2), MAX(t3, t4));
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_DIV:
@@ -899,7 +901,7 @@ static bool zend_inference_calc_binary_op_range(
 					tmp->min = MIN(MIN(MIN(t1, t2), MIN(t3, t4)), MIN(MIN(t1_, t2_), MIN(t3_, t4_)));
 					tmp->max = MAX(MAX(MAX(t1, t2), MAX(t3, t4)), MAX(MAX(t1_, t2_), MAX(t3_, t4_)));
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_MOD:
@@ -941,7 +943,7 @@ static bool zend_inference_calc_binary_op_range(
 						tmp->max = MIN(op1_max, op2_abs_max - 1);
 					}
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_SL:
@@ -979,7 +981,7 @@ static bool zend_inference_calc_binary_op_range(
 						tmp->max = MAX(MAX(t1, t2), MAX(t3, t4));
 					}
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_SR:
@@ -1019,7 +1021,7 @@ static bool zend_inference_calc_binary_op_range(
 					tmp->min = MIN(MIN(t1, t2), MIN(t3, t4));
 					tmp->max = MAX(MAX(t1, t2), MAX(t3, t4));
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_BW_OR:
@@ -1037,7 +1039,7 @@ static bool zend_inference_calc_binary_op_range(
 					op2_max = OP2_MAX_RANGE();
 					zend_ssa_range_or(op1_min, op1_max, op2_min, op2_max, tmp);
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_BW_AND:
@@ -1055,7 +1057,7 @@ static bool zend_inference_calc_binary_op_range(
 					op2_max = OP2_MAX_RANGE();
 					zend_ssa_range_and(op1_min, op1_max, op2_min, op2_max, tmp);
 				}
-				return 1;
+				return true;
 			}
 			break;
 		case ZEND_BW_XOR:
@@ -1063,7 +1065,7 @@ static bool zend_inference_calc_binary_op_range(
 			break;
 		default: ZEND_UNREACHABLE();
 	}
-	return 0;
+	return false;
 }
 
 static bool zend_inference_calc_range(const zend_op_array *op_array, const zend_ssa *ssa, int var, int widening, bool narrowing, zend_ssa_range *tmp)
@@ -1237,7 +1239,7 @@ static bool zend_inference_calc_range(const zend_op_array *op_array, const zend_
 		}
 		return (tmp->min <= tmp->max);
 	} else if (ssa->vars[var].definition < 0) {
-		return 0;
+		return false;
 	}
 	line = ssa->vars[var].definition;
 	opline = op_array->opcodes + line;
@@ -1445,7 +1447,9 @@ ZEND_API bool zend_inference_propagate_range(const zend_op_array *op_array, cons
 			break;
 		case ZEND_ASSIGN:
 			if (ssa_op->op1_def == var || ssa_op->op2_def == var || ssa_op->result_def == var) {
-				if (OP2_HAS_RANGE()) {
+				if (OP2_HAS_RANGE()
+				 && (ssa_op->op2_def == var
+				  || (opline->op1_type == IS_CV && !(OP1_INFO() & MAY_BE_REF)))) {
 					tmp->min = OP2_MIN_RANGE();
 					tmp->max = OP2_MAX_RANGE();
 					tmp->underflow = OP2_RANGE_UNDERFLOW();
@@ -1535,6 +1539,10 @@ ZEND_API bool zend_inference_propagate_range(const zend_op_array *op_array, cons
 		case ZEND_FUNC_NUM_ARGS:
 			tmp->min = 0;
 			tmp->max = ZEND_LONG_MAX;
+			return 1;
+		case ZEND_SPACESHIP:
+			tmp->min = -1;
+			tmp->max = 1;
 			return 1;
 		case ZEND_COUNT:
 			/* count() on Countable objects may return negative numbers */
@@ -1635,11 +1643,11 @@ static bool zend_inference_widening_meet(zend_ssa_var_info *var_info, zend_ssa_r
 		    var_info->range.max == r->max &&
 		    var_info->range.underflow == r->underflow &&
 		    var_info->range.overflow == r->overflow) {
-			return 0;
+			return false;
 		}
 	}
 	var_info->range = *r;
-	return 1;
+	return true;
 }
 
 static bool zend_ssa_range_widening(const zend_op_array *op_array, const zend_ssa *ssa, int var, int scc)
@@ -1649,10 +1657,10 @@ static bool zend_ssa_range_widening(const zend_op_array *op_array, const zend_ss
 	if (zend_inference_calc_range(op_array, ssa, var, 1, 0, &tmp)) {
 		if (zend_inference_widening_meet(&ssa->var_info[var], &tmp)) {
 			LOG_SSA_RANGE("  change range (widening  SCC %2d) %2d [%s%ld..%ld%s]\n", scc, var, (tmp.underflow?"-- ":""), tmp.min, tmp.max, (tmp.overflow?" ++":""));
-			return 1;
+			return true;
 		}
 	}
-	return 0;
+	return false;
 }
 
 static bool zend_inference_narrowing_meet(zend_ssa_var_info *var_info, zend_ssa_range *r)
@@ -1680,11 +1688,11 @@ static bool zend_inference_narrowing_meet(zend_ssa_var_info *var_info, zend_ssa_
 		    var_info->range.max == r->max &&
 		    var_info->range.underflow == r->underflow &&
 		    var_info->range.overflow == r->overflow) {
-			return 0;
+			return false;
 		}
 	}
 	var_info->range = *r;
-	return 1;
+	return true;
 }
 
 static bool zend_ssa_range_narrowing(const zend_op_array *op_array, const zend_ssa *ssa, int var, int scc)
@@ -1694,10 +1702,10 @@ static bool zend_ssa_range_narrowing(const zend_op_array *op_array, const zend_s
 	if (zend_inference_calc_range(op_array, ssa, var, 0, 1, &tmp)) {
 		if (zend_inference_narrowing_meet(&ssa->var_info[var], &tmp)) {
 			LOG_SSA_RANGE("  change range (narrowing SCC %2d) %2d [%s%ld..%ld%s]\n", scc, var, (tmp.underflow?"-- ":""), tmp.min, tmp.max, (tmp.overflow?" ++":""));
-			return 1;
+			return true;
 		}
 	}
-	return 0;
+	return false;
 }
 
 #ifdef NEG_RANGE
@@ -1714,12 +1722,12 @@ static bool zend_ssa_range_narrowing(const zend_op_array *op_array, const zend_s
 static bool zend_check_inner_cycles(const zend_op_array *op_array, zend_ssa *ssa, zend_bitset worklist, zend_bitset visited, int var)
 {
 	if (zend_bitset_in(worklist, var)) {
-		return 1;
+		return true;
 	}
 	zend_bitset_incl(worklist, var);
 	FOR_EACH_VAR_USAGE(var, CHECK_INNER_CYCLE);
 	zend_bitset_incl(visited, var);
-	return 0;
+	return false;
 }
 #endif
 
@@ -2095,9 +2103,8 @@ static void emit_type_narrowing_warning(const zend_op_array *op_array, const zen
 
 ZEND_API uint32_t ZEND_FASTCALL zend_array_type_info(const zval *zv)
 {
-	HashTable *ht = Z_ARRVAL_P(zv);
+	const HashTable *ht = Z_ARRVAL_P(zv);
 	uint32_t tmp = MAY_BE_ARRAY;
-	zend_string *str;
 	zval *val;
 
 	if (Z_REFCOUNTED_P(zv)) {
@@ -2114,7 +2121,7 @@ ZEND_API uint32_t ZEND_FASTCALL zend_array_type_info(const zval *zv)
 			tmp |= 1 << (Z_TYPE_P(val) + MAY_BE_ARRAY_SHIFT);
 		} ZEND_HASH_FOREACH_END();
 	} else {
-		ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(ht, str, val) {
+		ZEND_HASH_MAP_FOREACH_STR_KEY_VAL(ht, const zend_string *str, val) {
 			if (str) {
 				tmp |= MAY_BE_ARRAY_STRING_HASH;
 			} else {
@@ -2221,6 +2228,9 @@ static uint32_t assign_dim_array_result_type(
 			}
 			if (dim_type & (MAY_BE_UNDEF|MAY_BE_NULL)) {
 				tmp |= MAY_BE_ARRAY_KEY_STRING;
+			}
+			if ((tmp & MAY_BE_ARRAY_KEY_STRING) && MAY_BE_PACKED(arr_type)) {
+				tmp |= MAY_BE_ARRAY_NUMERIC_HASH;
 			}
 		}
 	}
@@ -2460,7 +2470,7 @@ static const zend_property_info *zend_fetch_static_prop_info(const zend_script *
 	const zend_property_info *prop_info = NULL;
 	if (opline->op1_type == IS_CONST) {
 		const zend_class_entry *ce = NULL;
-		if (opline->op2_type == IS_UNUSED) {
+		if (opline->op2_type == IS_UNUSED && !(op_array->fn_flags & ZEND_ACC_TRAIT_CLONE)) {
 			uint32_t fetch_type = opline->op2.num & ZEND_FETCH_CLASS_MASK;
 			switch (fetch_type) {
 				case ZEND_FETCH_CLASS_SELF:
@@ -2515,11 +2525,11 @@ static bool result_may_be_separated(const zend_ssa *ssa, const zend_ssa_op *ssa_
 		if (use_op == ssa_op + 1) {
 			if ((use_op->op1_use == tmp_var && use_op->op1_use_chain < 0)
 			 || (use_op->op2_use == tmp_var && use_op->op2_use_chain < 0)) {
-				return 0;
+				return false;
 			}
 		}
 	}
-	return 1;
+	return true;
 }
 
 static zend_always_inline zend_result _zend_update_type_info(
@@ -2807,11 +2817,11 @@ static zend_always_inline zend_result _zend_update_type_info(
 						 * null will be returned. */
 						tmp |= MAY_BE_NULL;
 					}
-					if (t2 & (MAY_BE_ARRAY | MAY_BE_OBJECT)) {
+					if (OP2_INFO() & (MAY_BE_ARRAY | MAY_BE_OBJECT)) {
 						/* Arrays and objects cannot be used as keys. */
 						tmp |= MAY_BE_NULL;
 					}
-					if (t1 & (MAY_BE_ANY - (MAY_BE_NULL | MAY_BE_FALSE | MAY_BE_STRING | MAY_BE_ARRAY))) {
+					if (OP1_INFO() & (MAY_BE_ANY - (MAY_BE_NULL | MAY_BE_FALSE | MAY_BE_STRING | MAY_BE_ARRAY))) {
 						/* null and false are implicitly converted to array, anything else
 						 * results in a null return value. */
 						tmp |= MAY_BE_NULL;
@@ -3452,7 +3462,11 @@ static zend_always_inline zend_result _zend_update_type_info(
 		case ZEND_ADD_ARRAY_UNPACK:
 			tmp = ssa_var_info[ssa_op->result_use].type;
 			ZEND_ASSERT(tmp & MAY_BE_ARRAY);
-			tmp |= t1 & (MAY_BE_ARRAY_KEY_ANY|MAY_BE_ARRAY_OF_ANY|MAY_BE_ARRAY_OF_REF);
+			if (t1 & MAY_BE_ARRAY_KEY_LONG) {
+				/* Integer keys are appended without copying the hash/packed layout of the source array. */
+				tmp |= MAY_BE_HASH_ONLY(tmp) ? MAY_BE_ARRAY_NUMERIC_HASH : MAY_BE_ARRAY_KEY_LONG;
+			}
+			tmp |= t1 & (MAY_BE_ARRAY_KEY_STRING|MAY_BE_ARRAY_OF_ANY|MAY_BE_ARRAY_OF_REF);
 			if (t1 & MAY_BE_OBJECT) {
 				tmp |= MAY_BE_ARRAY_KEY_ANY | MAY_BE_ARRAY_OF_ANY;
 			}
@@ -3612,6 +3626,9 @@ static zend_always_inline zend_result _zend_update_type_info(
 						}
 						if (t2 & (MAY_BE_UNDEF | MAY_BE_NULL)) {
 							key_type |= MAY_BE_ARRAY_KEY_STRING;
+						}
+						if ((key_type & MAY_BE_ARRAY_KEY_STRING) && MAY_BE_PACKED(t1)) {
+							key_type |= MAY_BE_ARRAY_NUMERIC_HASH;
 						}
 					}
 				} else if (opline->opcode == ZEND_FETCH_DIM_UNSET) {
@@ -3903,6 +3920,7 @@ static zend_always_inline zend_result _zend_update_type_info(
 			}
 			break;
 		case ZEND_CALLABLE_CONVERT:
+		case ZEND_CALLABLE_CONVERT_PARTIAL:
 			UPDATE_SSA_TYPE(MAY_BE_OBJECT | MAY_BE_RC1 | MAY_BE_RCN, ssa_op->result_def);
 			UPDATE_SSA_OBJ_TYPE(zend_ce_closure, /* is_instanceof */ false, ssa_op->result_def);
 			break;
@@ -4174,11 +4192,11 @@ static zend_class_entry *join_class_entries(
 
 static bool safe_instanceof(const zend_class_entry *ce1, const zend_class_entry *ce2) {
 	if (ce1 == ce2) {
-		return 1;
+		return true;
 	}
 	if (!(ce1->ce_flags & ZEND_ACC_LINKED)) {
 		/* This case could be generalized, similarly to unlinked_instanceof */
-		return 0;
+		return false;
 	}
 	return instanceof_function(ce1, ce2);
 }
@@ -4198,7 +4216,7 @@ static zend_result zend_infer_types_ex(const zend_op_array *op_array, const zend
 		j = zend_bitset_first(worklist, worklist_len);
 		zend_bitset_excl(worklist, j);
 		if (ssa_vars[j].definition_phi) {
-			zend_ssa_phi *p = ssa_vars[j].definition_phi;
+			const zend_ssa_phi *p = ssa_vars[j].definition_phi;
 			if (p->pi >= 0) {
 				zend_class_entry *ce = ssa_var_info[p->sources[0]].ce;
 				bool is_instanceof = ssa_var_info[p->sources[0]].is_instanceof;
@@ -4315,7 +4333,7 @@ static bool can_convert_to_double(
 	uint32_t type;
 
 	if (zend_bitset_in(visited, var_num)) {
-		return 1;
+		return true;
 	}
 	zend_bitset_incl(visited, var_num);
 
@@ -4328,7 +4346,7 @@ static bool can_convert_to_double(
 		}
 
 		if (!is_narrowable_instr(opline)) {
-			return 0;
+			return false;
 		}
 
 		/* Instruction always returns double, the conversion is certainly fine */
@@ -4340,12 +4358,12 @@ static bool can_convert_to_double(
 		/* UNDEF signals that the previous result is an effective double cast, this is only allowed
 		 * if this instruction would have done the cast anyway (previous check). */
 		if (Z_ISUNDEF_P(value)) {
-			return 0;
+			return false;
 		}
 
 		/* Check that narrowing can actually be useful */
 		if ((type & MAY_BE_ANY) & ~(MAY_BE_LONG|MAY_BE_DOUBLE)) {
-			return 0;
+			return false;
 		}
 
 		{
@@ -4387,7 +4405,7 @@ static bool can_convert_to_double(
 				} else if (is_effective_op1_double_cast(opline, &orig_op2)) {
 					ZVAL_UNDEF(&orig_result);
 				} else {
-					return 0;
+					return false;
 				}
 			} else if (Z_ISUNDEF(orig_op2)) {
 				if (opline->opcode == ZEND_MUL && Z_LVAL(orig_op1) == 0) {
@@ -4395,7 +4413,7 @@ static bool can_convert_to_double(
 				} else if (is_effective_op2_double_cast(opline, &orig_op1)) {
 					ZVAL_UNDEF(&orig_result);
 				} else {
-					return 0;
+					return false;
 				}
 			} else {
 				uint8_t opcode = opline->opcode;
@@ -4406,19 +4424,19 @@ static bool can_convert_to_double(
 
 				/* Avoid division by zero */
 				if (opcode == ZEND_DIV && zval_get_double(&orig_op2) == 0.0) {
-					return 0;
+					return false;
 				}
 
 				get_binary_op(opcode)(&orig_result, &orig_op1, &orig_op2);
 				get_binary_op(opcode)(&dval_result, &dval_op1, &dval_op2);
 				ZEND_ASSERT(Z_TYPE(dval_result) == IS_DOUBLE);
 				if (zval_get_double(&orig_result) != Z_DVAL(dval_result)) {
-					return 0;
+					return false;
 				}
 			}
 
 			if (!can_convert_to_double(op_array, ssa, ssa_op->result_def, &orig_result, visited)) {
-				return 0;
+				return false;
 			}
 		}
 	}
@@ -4427,15 +4445,15 @@ static bool can_convert_to_double(
 		/* Check that narrowing can actually be useful */
 		type = ssa->var_info[phi->ssa_var].type;
 		if ((type & MAY_BE_ANY) & ~(MAY_BE_LONG|MAY_BE_DOUBLE)) {
-			return 0;
+			return false;
 		}
 
 		if (!can_convert_to_double(op_array, ssa, phi->ssa_var, value, visited)) {
-			return 0;
+			return false;
 		}
 	}
 
-	return 1;
+	return true;
 }
 
 static zend_result zend_type_narrowing(const zend_op_array *op_array, const zend_script *script, zend_ssa *ssa, zend_long optimization_level)
@@ -4504,11 +4522,11 @@ static bool is_recursive_tail_call(const zend_op_array *op_array, const zend_op 
 		if (op->opcode == ZEND_DO_UCALL) {
 			const zend_call_info *call_info = info->call_map[op - op_array->opcodes];
 			if (call_info && op_array == &call_info->callee_func->op_array) {
-				return 1;
+				return true;
 			}
 		}
 	}
-	return 0;
+	return false;
 }
 
 uint32_t zend_get_return_info_from_signature_only(
@@ -4745,7 +4763,7 @@ static void zend_mark_cv_references(const zend_op_array *op_array, const zend_sc
 {
 	int var, def;
 	const zend_op *opline;
-	zend_arg_info *arg_info;
+	const zend_arg_info *arg_info;
 	uint32_t worklist_len = zend_bitset_len(ssa->vars_count);
 	zend_bitset worklist;
 	ALLOCA_FLAG(use_heap);
@@ -4839,7 +4857,7 @@ static void zend_mark_cv_references(const zend_op_array *op_array, const zend_sc
 		ssa->var_info[var].type |= MAY_BE_RC1 | MAY_BE_RCN | MAY_BE_REF | MAY_BE_ANY | MAY_BE_ARRAY_KEY_ANY | MAY_BE_ARRAY_OF_ANY | MAY_BE_ARRAY_OF_REF;
 
 		if (ssa->vars[var].phi_use_chain) {
-			zend_ssa_phi *p = ssa->vars[var].phi_use_chain;
+			const zend_ssa_phi *p = ssa->vars[var].phi_use_chain;
 			do {
 				if (!(ssa->var_info[p->ssa_var].type & MAY_BE_REF)) {
 					zend_bitset_incl(worklist, p->ssa_var);
@@ -4851,7 +4869,7 @@ static void zend_mark_cv_references(const zend_op_array *op_array, const zend_sc
 		if (ssa->vars[var].use_chain >= 0) {
 			int use = ssa->vars[var].use_chain;
 			FOREACH_USE(&ssa->vars[var], use) {
-				zend_ssa_op *op = ssa->ops + use;
+				const zend_ssa_op *op = ssa->ops + use;
 				if (op->op1_use == var && op->op1_def >= 0) {
 					if (!(ssa->var_info[op->op1_def].type & MAY_BE_REF)) {
 						/* Unset breaks references (outside global scope). */
@@ -4919,6 +4937,9 @@ ZEND_API zend_result zend_ssa_inference(zend_arena **arena, const zend_op_array 
 	return SUCCESS;
 }
 /* }}} */
+
+/* Key types whose conversion to an array offset may emit a diagnostic */
+#define MAY_BE_THROWING_KEY (MAY_BE_NULL|MAY_BE_DOUBLE|MAY_BE_ARRAY|MAY_BE_OBJECT|MAY_BE_RESOURCE)
 
 ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op, const zend_op_array *op_array, const zend_ssa *ssa, uint32_t t1, uint32_t t2)
 {
@@ -5024,7 +5045,6 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 		case ZEND_SWITCH_STRING:
 		case ZEND_MATCH:
 		case ZEND_ISSET_ISEMPTY_VAR:
-		case ZEND_ISSET_ISEMPTY_CV:
 		case ZEND_FUNC_NUM_ARGS:
 		case ZEND_FUNC_GET_ARGS:
 		case ZEND_COPY_TMP:
@@ -5112,7 +5132,14 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 		case ZEND_JMPZ_EX:
 		case ZEND_JMPNZ_EX:
 		case ZEND_JMP_SET:
-			return (t1 & MAY_BE_OBJECT);
+			/* NAN cast to bool will warn */
+			return (t1 & (MAY_BE_OBJECT|MAY_BE_DOUBLE));
+		case ZEND_ISSET_ISEMPTY_CV:
+			if (!(opline->extended_value & ZEND_ISEMPTY)) {
+				return 0;
+			}
+			/* empty() casts to bool: objects may have a cast handler, and NAN will warn */
+			return (t1 & (MAY_BE_OBJECT|MAY_BE_DOUBLE));
 		case ZEND_BOOL:
 		case ZEND_BOOL_NOT:
 			/* NAN Cast to bool will warn, but if we have a range it is fine */
@@ -5196,7 +5223,7 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 				return 1;
 			}
 			return (t1 & (MAY_BE_OBJECT|MAY_BE_RESOURCE|MAY_BE_TRUE|MAY_BE_FALSE|MAY_BE_STRING|MAY_BE_LONG|MAY_BE_DOUBLE)) || opline->op2_type == IS_UNUSED ||
-				(t2 & (MAY_BE_UNDEF|MAY_BE_ARRAY|MAY_BE_OBJECT|MAY_BE_RESOURCE));
+				(t2 & (MAY_BE_UNDEF|MAY_BE_THROWING_KEY));
 		case ZEND_ASSIGN_OBJ:
 			if (t1 & (MAY_BE_ANY-MAY_BE_OBJECT)) {
 				return 1;
@@ -5230,11 +5257,24 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 					return 1;
 				}
 
-				zend_property_info *prop_info =
+				const zend_property_info *prop_info =
 					zend_hash_find_ptr(&ce->properties_info, prop_name);
 				if (prop_info) {
 					if (ZEND_TYPE_IS_SET(prop_info->type)) {
-						return 1;
+						uint32_t type_mask = ZEND_TYPE_PURE_MASK(prop_info->type);
+
+						/* The assignment can't fail if the property only accepts a single scalar type
+						 * and the value already has this type: the old value has no destructor.
+						 * If the property holds a reference, all its type sources accept this type because they accept the current value. */
+						if ((prop_info->flags & (ZEND_ACC_READONLY|ZEND_ACC_PPP_SET_MASK))
+						 || prop_info->hooks
+						 || ZEND_TYPE_IS_COMPLEX(prop_info->type)
+						 || (type_mask & ~(MAY_BE_NULL|MAY_BE_BOOL|MAY_BE_LONG|MAY_BE_DOUBLE|MAY_BE_STRING))
+						 /* single type, this excludes bool too as a reference can exist to true or false standalone types. */
+						 || (type_mask & (type_mask - 1))
+						 || (OP1_DATA_INFO() & (MAY_BE_ANY|MAY_BE_UNDEF|MAY_BE_REF)) != type_mask) {
+							return 1;
+						}
 					}
 					return !(prop_info->flags & ZEND_ACC_PUBLIC)
 						&& prop_info->ce != op_array->scope;
@@ -5248,9 +5288,9 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 		case ZEND_ROPE_END:
 			return t2 & (MAY_BE_ARRAY|MAY_BE_OBJECT);
 		case ZEND_INIT_ARRAY:
-			return (opline->op2_type != IS_UNUSED) && (t2 & (MAY_BE_ARRAY|MAY_BE_OBJECT|MAY_BE_RESOURCE));
+			return (opline->op2_type != IS_UNUSED) && (t2 & MAY_BE_THROWING_KEY);
 		case ZEND_ADD_ARRAY_ELEMENT:
-			return (opline->op2_type == IS_UNUSED) || (t2 & (MAY_BE_NULL|MAY_BE_ARRAY|MAY_BE_OBJECT|MAY_BE_RESOURCE));
+			return (opline->op2_type == IS_UNUSED) || (t2 & MAY_BE_THROWING_KEY);
 		case ZEND_STRLEN:
 			return (t1 & MAY_BE_ANY) != MAY_BE_STRING;
 		case ZEND_COUNT:
@@ -5277,9 +5317,9 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 		case ZEND_FETCH_IS:
 			return (t2 & (MAY_BE_ARRAY|MAY_BE_OBJECT));
 		case ZEND_ISSET_ISEMPTY_DIM_OBJ:
-			return (t1 & MAY_BE_OBJECT) || (t2 & (MAY_BE_DOUBLE|MAY_BE_ARRAY|MAY_BE_OBJECT));
+			return (t1 & MAY_BE_OBJECT) || (t2 & MAY_BE_THROWING_KEY);
 		case ZEND_FETCH_DIM_IS:
-			return (t1 & MAY_BE_OBJECT) || (t2 & (MAY_BE_DOUBLE|MAY_BE_ARRAY|MAY_BE_OBJECT|MAY_BE_RESOURCE));
+			return (t1 & MAY_BE_OBJECT) || (t2 & MAY_BE_THROWING_KEY);
 		case ZEND_CAST:
 			switch (opline->extended_value) {
 				case IS_LONG:
@@ -5301,7 +5341,7 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 			if ((t2 & MAY_BE_ANY) != MAY_BE_ARRAY) {
 				return 1;
 			}
-			if ((t1 & (MAY_BE_ARRAY|MAY_BE_OBJECT|MAY_BE_RESOURCE))) {
+			if (t1 & MAY_BE_THROWING_KEY) {
 				return 1;
 			}
 			return 0;
@@ -5326,7 +5366,7 @@ ZEND_API bool zend_may_throw_ex(const zend_op *opline, const zend_ssa_op *ssa_op
 			if (t1 & (MAY_BE_FALSE|MAY_BE_TRUE|MAY_BE_LONG|MAY_BE_DOUBLE|MAY_BE_STRING|MAY_BE_OBJECT|MAY_BE_RESOURCE|MAY_BE_REF)) {
 				return 1;
 			}
-			if (t2 & (MAY_BE_RESOURCE|MAY_BE_ARRAY|MAY_BE_OBJECT)) {
+			if (t2 & MAY_BE_THROWING_KEY) {
 				return 1;
 			}
 			if (opline->op2_type == IS_UNUSED) {

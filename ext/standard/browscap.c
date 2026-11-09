@@ -255,7 +255,7 @@ static void browscap_add_kv(
 		browser_data *bdata, zend_string *key, zend_string *value, bool persistent) {
 	if (bdata->kv_used == bdata->kv_size) {
 		bdata->kv_size *= 2;
-		bdata->kv = safe_perealloc(bdata->kv, sizeof(browscap_kv), bdata->kv_size, 0, persistent);
+		bdata->kv = safe_perealloc(bdata->kv, bdata->kv_size, sizeof(browscap_kv), 0, persistent);
 	}
 
 	bdata->kv[bdata->kv_used].key = key;
@@ -334,8 +334,8 @@ static void php_browscap_parser_cb(zval *arg1, zval *arg2, zval *arg3, int callb
 						zend_string_equals_ci(ctx->current_section_name, Z_STR_P(arg2))
 					) {
 						zend_error(E_CORE_ERROR, "Invalid browscap ini file: "
-							"'Parent' value cannot be same as the section name: %s "
-							"(in file %s)", ZSTR_VAL(ctx->current_section_name), zend_ini_string_literal("browscap"));
+							"'Parent' value cannot be same as the section name: %pS "
+							"(in file %s)", ctx->current_section_name, zend_ini_string_literal("browscap"));
 						return;
 					}
 
@@ -700,7 +700,6 @@ PHP_FUNCTION(get_browser)
 	bool return_array = 0;
 	browser_data *bdata;
 	browscap_entry *found_entry = NULL;
-	HashTable *agent_ht;
 
 	ZEND_PARSE_PARAMETERS_START(0, 2)
 		Z_PARAM_OPTIONAL
@@ -783,15 +782,7 @@ PHP_FUNCTION(get_browser)
 
 	zend_string_release_ex(lookup_browser_name, false);
 
-	agent_ht = browscap_entry_to_array(bdata, found_entry);
-
-	if (return_array) {
-		RETVAL_ARR(agent_ht);
-	} else {
-		object_and_properties_init(return_value, zend_standard_class_def, agent_ht);
-	}
-
-	HashTable *target_ht = return_array ? Z_ARRVAL_P(return_value) : Z_OBJPROP_P(return_value);
+	HashTable *agent_ht = browscap_entry_to_array(bdata, found_entry);
 
 	while (found_entry->parent) {
 		found_entry = zend_hash_find_ptr(bdata->htab, found_entry->parent);
@@ -799,7 +790,13 @@ PHP_FUNCTION(get_browser)
 			break;
 		}
 
-		browscap_entry_add_kv_to_existing_array(bdata, found_entry, target_ht);
+		browscap_entry_add_kv_to_existing_array(bdata, found_entry, agent_ht);
+	}
+
+	if (return_array) {
+		RETVAL_ARR(agent_ht);
+	} else {
+		object_and_properties_init(return_value, zend_standard_class_def, agent_ht);
 	}
 }
 /* }}} */

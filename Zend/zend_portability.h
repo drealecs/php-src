@@ -52,10 +52,30 @@
 #include <assert.h>
 #include <math.h>
 
+#ifdef __cplusplus
+extern "C++" {
+# include <atomic>
+/* Make the atomic types used by Zend available to C++ extensions. */
+using std::atomic_bool;
+using std::atomic_int;
+using std::atomic_thread_fence;
+using std::memory_order_acquire;
+}
+#else
+# if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
+#  error "Zend requires C11 or later"
+# endif
+# ifdef __STDC_NO_ATOMICS__
+#  error "Zend requires C11 atomics"
+# endif
+# include <stdatomic.h>
+#endif
+
 #ifdef HAVE_UNIX_H
 # include <unix.h>
 #endif
 
+#include <stdalign.h>
 #include <stdarg.h>
 #include <stddef.h>
 
@@ -290,7 +310,9 @@ char *alloca();
 # define ZEND_ATTRIBUTE_PTR_FORMAT(type, idx, first)
 #endif
 
-#if ZEND_GCC_VERSION >= 3001 || __has_attribute(deprecated)
+#if __STDC_VERSION__ >= 202311L || (defined(__cplusplus) && __cplusplus >= 201402L)
+# define ZEND_ATTRIBUTE_DEPRECATED [[deprecated]]
+#elif ZEND_GCC_VERSION >= 3001 || __has_attribute(deprecated)
 # define ZEND_ATTRIBUTE_DEPRECATED  __attribute__((deprecated))
 #elif defined(ZEND_WIN32)
 # define ZEND_ATTRIBUTE_DEPRECATED  __declspec(deprecated)
@@ -356,14 +378,10 @@ char *alloca();
 # endif
 #endif
 
-#if (defined(__GNUC__) && __GNUC__ >= 3 && !defined(__INTEL_COMPILER) && !defined(__APPLE__) && !defined(__hpux) && !defined(_AIX) && !defined(__osf__)) || __has_attribute(noreturn)
-# define HAVE_NORETURN
-# define ZEND_NORETURN __attribute__((noreturn))
-#elif defined(ZEND_WIN32)
-# define HAVE_NORETURN
-# define ZEND_NORETURN __declspec(noreturn)
+#if __STDC_VERSION__ >= 202311L || defined(__cplusplus)
+# define ZEND_NORETURN [[noreturn]]
 #else
-# define ZEND_NORETURN
+# define ZEND_NORETURN _Noreturn
 #endif
 
 #if __has_attribute(force_align_arg_pointer)
@@ -373,7 +391,6 @@ char *alloca();
 #endif
 
 #if (defined(__GNUC__) && __GNUC__ >= 3 && !defined(__INTEL_COMPILER) && !defined(__APPLE__) && !defined(__hpux) && !defined(_AIX) && !defined(__osf__))
-# define HAVE_NORETURN_ALIAS
 # define HAVE_ATTRIBUTE_WEAK
 #endif
 
@@ -385,6 +402,12 @@ char *alloca();
 #define ZEND_ELEMENT_COUNT(m) __attribute__((counted_by(m)))
 #else
 #define ZEND_ELEMENT_COUNT(m)
+#endif
+
+#if __STDC_VERSION__ >= 202311L
+# define ZEND_TYPEOF(x) typeof(x)
+#elif ZEND_GCC_VERSION
+# define ZEND_TYPEOF(x) __typeof__(x)
 #endif
 
 #if __cplusplus
@@ -401,13 +424,12 @@ extern "C++" {
 
 # define ZEND_CONTAINER_OF(ptr, Type, member) zend_container_of<Type, decltype(Type::member)>(ptr, offsetof(Type, member))
 }
-#elif __STDC_VERSION__ >= 202311L || ZEND_GCC_VERSION
-/* typeof is C23 or a GCC extension */
+#elif defined(ZEND_TYPEOF)
 # define ZEND_CONTAINER_OF(ptr, Type, member) \
 	_Generic( \
 		(ptr), \
-		const typeof(((Type*)0)->member) *: ((const Type*)((char*)(ptr) - offsetof(Type, member))), \
-		typeof(((Type*)0)->member) *: ((Type*)((char*)(ptr) - offsetof(Type, member))) \
+		const ZEND_TYPEOF(((Type*)0)->member) *: ((const Type*)((char*)(ptr) - offsetof(Type, member))), \
+		ZEND_TYPEOF(((Type*)0)->member) *: ((Type*)((char*)(ptr) - offsetof(Type, member))) \
 	)
 #else
 /* Define a variant that does not keep const-ness for older compilers. Mismatches
@@ -542,8 +564,6 @@ extern "C++" {
 #define ZEND_STRS(str)		(str), (sizeof(str))
 #define ZEND_NORMALIZE_BOOL(n)			\
 	((n) ? (((n)<0) ? -1 : 1) : 0)
-#define ZEND_TRUTH(x)		((x) ? 1 : 0)
-#define ZEND_LOG_XOR(a, b)		(ZEND_TRUTH(a) ^ ZEND_TRUTH(b))
 
 /**
  * Do a three-way comparison of two integers and returns -1, 0 or 1
@@ -862,16 +882,7 @@ extern "C++" {
 /** @deprecated */
 #define ZEND_CGG_DIAGNOSTIC_IGNORED_END ZEND_DIAGNOSTIC_IGNORED_END
 
-#if defined(__cplusplus)
-# define ZEND_STATIC_ASSERT(c, m) static_assert((c), m)
-#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L) /* C11 */
-# define ZEND_STATIC_ASSERT(c, m) _Static_assert((c), m)
-#else
-# define ZEND_STATIC_ASSERT(c, m)
-#endif
-
-#if ((defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) /* C11 */ \
-  || (defined(__cplusplus) && __cplusplus >= 201103L) /* C++11 */) && !defined(ZEND_WIN32)
+#if !defined(ZEND_WIN32)
 typedef max_align_t zend_max_align_t;
 #else
 typedef union {

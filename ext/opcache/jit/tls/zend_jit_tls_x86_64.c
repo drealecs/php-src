@@ -100,10 +100,18 @@ zend_result zend_jit_resolve_tsrm_ls_cache_offsets(
 		"leaq   _tsrm_ls_cache@tlsgd(%%rip), %%rdi\n"
 		".word  0x6666\n"
 		"rex64\n"
-		"call   __tls_get_addr\n"
+		"call   __tls_get_addr@PLT\n"
 		/* Load thread pointer address */
 		"movq   %%fs:0, %%rsi\n"
 		: "=a" (addr), "=b" (code), "=S" (thread_pointer)
+		:
+		/* call may clobber volatile registers */
+		: "rcx", "rdx", "rdi",
+		  "r8", "r9", "r10", "r11",
+		  "st", "st(1)", "st(2)", "st(3)", "st(4)", "st(5)", "st(6)", "st(7)",
+		  "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+		  "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+		  "cc", "memory"
 	);
 
 	ZEND_ASSERT(addr == &_tsrm_ls_cache);
@@ -158,7 +166,9 @@ code_changed:
 
 	/*
 	 * 64 48 8b 04 25 00 00 00 00	movq    %fs:0x0,%rax
-	 * 48 8d 80 f8 ff ff ff	        leaq    -0x8(%rax),%rax
+	 * 48 8d 80 f8 ff ff ff	        leaq    -0x8(%rax),%rax (Local Exec)
+	 * or
+	 * 48 03 05 xx xx xx xx	        addq    any(%rip),%rax (Initial Exec)
 	 */
 
 	// movq %fs:0x0,%rax
@@ -169,20 +179,16 @@ code_changed:
 		return FAILURE;
 	}
 
-	// leaq any(%rax),$rax
-	if (memcmp(&code[9], "\x48\x8d\x80", 3) != 0) {
+	// leaq any(%rax),%rax or addq any(%rip),%rax
+	if (memcmp(&code[9], "\x48\x8d\x80", 3) != 0
+			&& memcmp(&code[9], "\x48\x03\x05", 3) != 0) {
 		uint64_t bytes;
-		memcpy(&bytes, &code[10], 8);
-		zend_accel_error(ACCEL_LOG_DEBUG, "leaq insn does not match: 0x%016" PRIx64 "\n", bytes);
+		memcpy(&bytes, &code[9], 8);
+		zend_accel_error(ACCEL_LOG_DEBUG, "leaq/addq insn does not match: 0x%016" PRIx64 "\n", bytes);
 		return FAILURE;
 	}
 
-	/* Extract immediate values */
-
-	uintptr_t offset = (uintptr_t)(int32_t)(((uint32_t)code[15] << 24)
-		| ((uint32_t)code[14] << 16)
-		| ((uint32_t)code[13] << 8)
-		| ((uint32_t)code[12]));
+	uintptr_t offset = (uintptr_t)addr - (uintptr_t)thread_pointer;
 
 	if ((uintptr_t)&_tsrm_ls_cache - (uintptr_t)thread_pointer == offset) {
 		*tcb_offset = offset;

@@ -135,7 +135,7 @@ PHPAPI ZEND_COLD void php_info_print_module(zend_module_entry *zend_module) /* {
 			zend_string *url_name = php_url_encode(zend_module->name, strlen(zend_module->name));
 
 			zend_str_tolower(ZSTR_VAL(url_name), ZSTR_LEN(url_name));
-			php_info_printf("<h2><a name=\"module_%s\" href=\"#module_%s\">%s</a></h2>\n", ZSTR_VAL(url_name), ZSTR_VAL(url_name), zend_module->name);
+			php_info_printf("<h2><a name=\"module_%pS\" href=\"#module_%pS\">%s</a></h2>\n", url_name, url_name, zend_module->name);
 
 			efree(url_name);
 		} else {
@@ -733,13 +733,13 @@ PHPAPI zend_string *php_get_uname(char mode)
 /* }}} */
 
 /* {{{ php_print_info_htmlhead */
-PHPAPI ZEND_COLD void php_print_info_htmlhead(void)
+PHPAPI ZEND_COLD void php_print_info_htmlhead(const char *title)
 {
 	php_info_print("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"DTD/xhtml1-transitional.dtd\">\n");
 	php_info_print("<html xmlns=\"http://www.w3.org/1999/xhtml\">");
 	php_info_print("<head>\n");
 	php_info_print_style();
-	php_info_printf("<title>PHP %s - phpinfo()</title>", PHP_VERSION);
+	php_info_printf("<title>PHP %s - %s</title>", PHP_VERSION, title);
 	php_info_print("<meta name=\"ROBOTS\" content=\"NOINDEX,NOFOLLOW,NOARCHIVE\" />");
 	php_info_print("</head>\n");
 	php_info_print("<body><div class=\"center\">\n");
@@ -761,7 +761,7 @@ PHPAPI ZEND_COLD void php_print_info(int flag)
 	zend_string *php_uname;
 
 	if (!sapi_module.phpinfo_as_text) {
-		php_print_info_htmlhead();
+		php_print_info_htmlhead("phpinfo()");
 	} else {
 		php_info_print("phpinfo()\n");
 	}

@@ -12,17 +12,13 @@
    +----------------------------------------------------------------------+
 */
 
-extern "C" {
 #include "php.h"
-}
 
 #include <unicode/listformatter.h>
 #include <unicode/locid.h>
 #include "../intl_convertcpp.h"
 
-extern "C" {
 #include "php_intl.h"
-}
 #include "listformatter_class.h"
 #include "listformatter_arginfo.h"
 
@@ -67,6 +63,9 @@ PHP_METHOD(IntlListFormatter, __construct)
         zend_long type = INTL_LISTFORMATTER_FALLBACK_TYPE_AND;
         zend_long width = INTL_LISTFORMATTER_FALLBACK_WIDTH_WIDE;
     #endif
+
+    intl_errors_reset(LISTFORMATTER_ERROR_P(obj));
+
     ZEND_PARSE_PARAMETERS_START(1, 3)
         Z_PARAM_STRING(locale, locale_len)
         Z_PARAM_OPTIONAL
@@ -207,7 +206,7 @@ PHP_METHOD(IntlListFormatter, getErrorMessage)
     RETURN_STR(message);
 }
 
-void listformatter_register_class(void)
+U_CFUNC void listformatter_register_class(void)
 {
     zend_class_entry *class_entry = register_class_IntlListFormatter();
     class_entry->create_object = listformatter_create_object;

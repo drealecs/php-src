@@ -137,7 +137,7 @@ static xmlNodePtr sxe_get_element_by_offset(php_sxe_object *sxe, zend_long offse
 			return NULL;
 		}
 	}
-	while (node && nodendx <= offset) {
+	while (node && (offset < 0 || nodendx <= offset)) {
 		if (node->type == XML_ELEMENT_NODE && match_ns(node, sxe->iter.nsprefix, sxe->iter.isprefix)) {
 			if (sxe->iter.type == SXE_ITER_CHILD || (
 				sxe->iter.type == SXE_ITER_ELEMENT && xmlStrEqual(node->name, BAD_CAST ZSTR_VAL(sxe->iter.name)))) {
@@ -301,14 +301,16 @@ long_dim:
 			}
 			if (!member || Z_TYPE_P(member) == IS_LONG) {
 				zend_long cnt = 0;
+				bool appendable = true;
 				xmlNodePtr mynode = node;
 
 				if (sxe->iter.type == SXE_ITER_CHILD) {
 					node = php_sxe_get_first_node_non_destructive(sxe, node);
 				}
 				if (sxe->iter.type == SXE_ITER_NONE) {
-					if (member && Z_LVAL_P(member) > 0) {
-						php_error_docref(NULL, E_WARNING, "Cannot add element %s number " ZEND_LONG_FMT " when only 0 such elements exist", mynode->name, Z_LVAL_P(member));
+					if (member && Z_LVAL_P(member) != 0) {
+						node = NULL;
+						appendable = false;
 					}
 				} else if (member) {
 					node = sxe_get_element_by_offset(sxe, Z_LVAL_P(member), node, &cnt);
@@ -318,11 +320,13 @@ long_dim:
 				if (node) {
 					node_as_zval(sxe, node, rv, SXE_ITER_NONE, NULL, sxe->iter.nsprefix, sxe->iter.isprefix);
 				} else if (type == BP_VAR_W || type == BP_VAR_RW) {
-					if (member && cnt < Z_LVAL_P(member)) {
+					if (member && (Z_LVAL_P(member) < 0 || cnt < Z_LVAL_P(member))) {
 						php_error_docref(NULL, E_WARNING, "Cannot add element %s number " ZEND_LONG_FMT " when only " ZEND_LONG_FMT " such elements exist", mynode->name, Z_LVAL_P(member), cnt);
 					}
-					node = xmlNewTextChild(mynode->parent, mynode->ns, mynode->name, NULL);
-					node_as_zval(sxe, node, rv, SXE_ITER_NONE, NULL, sxe->iter.nsprefix, sxe->iter.isprefix);
+					if (appendable && (!member || Z_LVAL_P(member) >= 0)) {
+						node = xmlNewTextChild(mynode->parent, mynode->ns, mynode->name, NULL);
+						node_as_zval(sxe, node, rv, SXE_ITER_NONE, NULL, sxe->iter.nsprefix, sxe->iter.isprefix);
+					}
 				}
 			} else {
 				/* In BP_VAR_IS mode only return a proper node if it actually exists. */
@@ -432,8 +436,7 @@ long_dim:
 
 	if (sxe->iter.type == SXE_ITER_ATTRLIST) {
 		access_mode = SXE_ACCESS_ATTRIBS;
-		node = php_sxe_get_first_node_non_destructive(sxe, node);
-		attr = (xmlAttrPtr)node;
+		attr = (xmlAttrPtr)php_sxe_get_first_node_non_destructive(sxe, node);
 		test = sxe->iter.name != NULL;
 	} else if (sxe->iter.type != SXE_ITER_CHILD) {
 		mynode = node;
@@ -517,19 +520,18 @@ long_dim:
 			if (!member || Z_TYPE_P(member) == IS_LONG) {
 				if (node->type == XML_ATTRIBUTE_NODE) {
 					zend_throw_error(NULL, "Cannot create duplicate attribute");
-					if (value_str) {
-						zend_string_release(value_str);
-					}
-					return &EG(error_zval);
+					value = &EG(error_zval);
+					goto out;
 				}
 
 				if (sxe->iter.type == SXE_ITER_NONE) {
-					newnode = node;
-					++counter;
-					if (member && Z_LVAL_P(member) > 0) {
+					if (member && Z_LVAL_P(member) != 0) {
 						php_error_docref(NULL, E_WARNING, "Cannot add element %s number " ZEND_LONG_FMT " when only 0 such elements exist", mynode->name, Z_LVAL_P(member));
 						value = &EG(error_zval);
+						goto out;
 					}
+					newnode = node;
+					++counter;
 				} else if (member) {
 					newnode = sxe_get_element_by_offset(sxe, Z_LVAL_P(member), node, &cnt);
 					if (newnode) {
@@ -576,10 +578,14 @@ next_iter:
 					newnode = xmlNewTextChild(mynode, NULL, (xmlChar *)Z_STRVAL_P(member), value_str ? (xmlChar *)ZSTR_VAL(value_str) : NULL);
 				}
 			} else if (!member || Z_TYPE_P(member) == IS_LONG) {
-				if (member && cnt < Z_LVAL_P(member)) {
+				if (member && (Z_LVAL_P(member) < 0 || cnt < Z_LVAL_P(member))) {
 					php_error_docref(NULL, E_WARNING, "Cannot add element %s number " ZEND_LONG_FMT " when only " ZEND_LONG_FMT " such elements exist", mynode->name, Z_LVAL_P(member), cnt);
 				}
-				newnode = xmlNewTextChild(mynode->parent, mynode->ns, mynode->name, value_str ? (xmlChar *)ZSTR_VAL(value_str) : NULL);
+				if (member && Z_LVAL_P(member) < 0) {
+					value = &EG(error_zval);
+				} else {
+					newnode = xmlNewTextChild(mynode->parent, mynode->ns, mynode->name, value_str ? (xmlChar *)ZSTR_VAL(value_str) : NULL);
+				}
 			}
 		} else {
 			if (Z_TYPE_P(member) == IS_LONG) {
@@ -590,6 +596,7 @@ next_iter:
 		}
 	}
 
+out:
 	if (member == &tmp_zv) {
 		zval_ptr_dtor_str(&tmp_zv);
 	}
@@ -904,7 +911,7 @@ static inline zend_string *sxe_xmlNodeListGetString(xmlDocPtr doc, xmlNodePtr li
 	zend_string *res;
 
 	if (tmp) {
-		res = zend_string_init((char*)tmp, strlen((char *)tmp), 0);
+		res = zend_string_finit((char*)tmp, strlen((char *)tmp), /* persistent */ false, /* fallible */ true);
 		xmlFree(tmp);
 	} else {
 		res = ZSTR_EMPTY_ALLOC();
@@ -915,17 +922,16 @@ static inline zend_string *sxe_xmlNodeListGetString(xmlDocPtr doc, xmlNodePtr li
 /* }}} */
 
 /* {{{ get_base_node_value() */
-static void get_base_node_value(php_sxe_object *sxe_ref, xmlNodePtr node, zval *value, zend_string *nsprefix, int isprefix)
+static bool get_base_node_value(php_sxe_object *sxe_ref, xmlNodePtr node, zval *value, zend_string *nsprefix, int isprefix)
 {
 	php_sxe_object *subnode;
-	xmlChar        *contents;
 
 	if (node->children && node->children->type == XML_TEXT_NODE && !xmlIsBlankNode(node->children)) {
-		contents = xmlNodeListGetString(node->doc, node->children, 1);
-		if (contents) {
-			ZVAL_STRING(value, (char *)contents);
-			xmlFree(contents);
+		zend_string *str = sxe_xmlNodeListGetString(node->doc, node->children, 1);
+		if (UNEXPECTED(!str)) {
+			return false;
 		}
+		ZVAL_STR(value, str);
 	} else {
 		subnode = php_sxe_object_new(sxe_ref->zo.ce, sxe_ref->fptr_count);
 		subnode->document = sxe_ref->document;
@@ -938,6 +944,7 @@ static void get_base_node_value(php_sxe_object *sxe_ref, xmlNodePtr node, zval *
 
 		ZVAL_OBJ(value, &subnode->zo);
 	}
+	return true;
 }
 /* }}} */
 
@@ -1079,13 +1086,20 @@ static HashTable *sxe_get_prop_hash(zend_object *object, int is_debug) /* {{{ */
 			test = sxe->iter.name && sxe->iter.type == SXE_ITER_ATTRLIST;
 			while (attr) {
 				if ((!test || xmlStrEqual(attr->name, BAD_CAST ZSTR_VAL(sxe->iter.name))) && match_ns((xmlNodePtr)attr, sxe->iter.nsprefix, sxe->iter.isprefix)) {
-					ZVAL_STR(&value, sxe_xmlNodeListGetString((xmlDocPtr) sxe->document->ptr, attr->children, 1));
+					zend_string *str = sxe_xmlNodeListGetString((xmlDocPtr) sxe->document->ptr, attr->children, 1);
+					if (UNEXPECTED(!str)) {
+						goto oom;
+					}
+					ZVAL_STR(&value, str);
 					namelen = xmlStrlen(attr->name);
 					if (Z_ISUNDEF(zattr)) {
 						array_init(&zattr);
 						sxe_properties_add(rv, "@attributes", sizeof("@attributes") - 1, &zattr);
 					}
 					add_assoc_zval_ex(&zattr, (char*)attr->name, namelen, &value);
+					if (ZEND_HAS_OOM()) {
+						goto oom;
+					}
 				}
 				attr = attr->next;
 			}
@@ -1097,7 +1111,11 @@ static HashTable *sxe_get_prop_hash(zend_object *object, int is_debug) /* {{{ */
 
 	if (node && sxe->iter.type != SXE_ITER_ATTRLIST) {
 		if (node->type == XML_ATTRIBUTE_NODE) {
-			ZVAL_STR(&value, sxe_xmlNodeListGetString(node->doc, node->children, 1));
+			zend_string *str = sxe_xmlNodeListGetString(node->doc, node->children, 1);
+			if (UNEXPECTED(!str)) {
+				goto oom;
+			}
+			ZVAL_STR(&value, str);
 			zend_hash_next_index_insert(rv, &value);
 			node = NULL;
 		} else if (sxe->iter.type != SXE_ITER_CHILD) {
@@ -1117,8 +1135,15 @@ static HashTable *sxe_get_prop_hash(zend_object *object, int is_debug) /* {{{ */
 					const xmlChar *cur = node->content;
 
 					if (*cur != 0) {
-						ZVAL_STR(&value, sxe_xmlNodeListGetString(node->doc, node, 1));
+						zend_string *str = sxe_xmlNodeListGetString(node->doc, node, 1);
+						if (UNEXPECTED(!str)) {
+							goto oom;
+						}
+						ZVAL_STR(&value, str);
 						zend_hash_next_index_insert(rv, &value);
+						if (ZEND_HAS_OOM()) {
+							goto oom;
+						}
 					}
 					goto next_iter;
 				}
@@ -1135,12 +1160,17 @@ static HashTable *sxe_get_prop_hash(zend_object *object, int is_debug) /* {{{ */
 				namelen = xmlStrlen(node->name);
 			}
 
-			get_base_node_value(sxe, node, &value, sxe->iter.nsprefix, sxe->iter.isprefix);
+			if (UNEXPECTED(!get_base_node_value(sxe, node, &value, sxe->iter.nsprefix, sxe->iter.isprefix))) {
+				goto oom;
+			}
 
 			if ( use_iter ) {
 				zend_hash_next_index_insert(rv, &value);
 			} else {
 				sxe_properties_add(rv, name, namelen, &value);
+			}
+			if (ZEND_HAS_OOM()) {
+				goto oom;
 			}
 next_iter:
 			if (UNEXPECTED(node->type == XML_ENTITY_DECL)) {
@@ -1157,6 +1187,10 @@ next_iter:
 		}
 	}
 
+	return rv;
+
+oom:
+	zend_hash_clean(rv);
 	return rv;
 }
 /* }}} */
@@ -1195,8 +1229,11 @@ static int sxe_objects_compare(zval *object1, zval *object2) /* {{{ */
 	sxe2 = Z_SXEOBJ_P(object2);
 
 	if (sxe1->node != NULL && sxe2->node != NULL) {
+		xmlNodePtr node1 = php_sxe_get_first_node_non_destructive(sxe1, sxe1->node->node);
+		xmlNodePtr node2 = php_sxe_get_first_node_non_destructive(sxe2, sxe2->node->node);
+
 		/* Both nodes set: Only support equality comparison between nodes. */
-		if (sxe1->node == sxe2->node) {
+		if (node1 == node2 && (node1 != NULL || sxe1->node == sxe2->node)) {
 			return 0;
 		}
 		return ZEND_UNCOMPARABLE;
@@ -1204,7 +1241,7 @@ static int sxe_objects_compare(zval *object1, zval *object2) /* {{{ */
 
 	if (sxe1->node == NULL && sxe2->node == NULL) {
 		/* Both nodes not set: Only support equality comparison between documents. */
-		if (sxe1->document->ptr == sxe2->document->ptr) {
+		if (sxe1->document != NULL && sxe2->document != NULL && sxe1->document->ptr == sxe2->document->ptr) {
 			return 0;
 		}
 		return ZEND_UNCOMPARABLE;
@@ -1297,7 +1334,9 @@ PHP_METHOD(SimpleXMLElement, xpath)
 
 	if (result != NULL) {
 		array_init_size(return_value, result->nodeNr);
-		zend_hash_real_init_packed(Z_ARRVAL_P(return_value));
+		if (zend_hash_real_finit_packed(Z_ARRVAL_P(return_value), true) != SUCCESS) {
+			goto oom;
+		}
 
 		for (i = 0; i < result->nodeNr; ++i) {
 			nodeptr = result->nodeTab[i];
@@ -1316,6 +1355,9 @@ PHP_METHOD(SimpleXMLElement, xpath)
 				}
 
 				add_next_index_zval(return_value, &value);
+				if (ZEND_HAS_OOM()) {
+					goto oom;
+				}
 			}
 		}
 	} else {
@@ -1323,6 +1365,13 @@ PHP_METHOD(SimpleXMLElement, xpath)
 	}
 
 	xmlXPathFreeObject(retval);
+	return;
+
+oom:
+	xmlXPathFreeObject(retval);
+	zval_ptr_dtor(return_value);
+	ZVAL_NULL(return_value);
+	RETURN_OOM();
 }
 /* }}} */
 
@@ -1620,7 +1669,11 @@ PHP_METHOD(SimpleXMLElement, getName)
 	node = php_sxe_get_first_node_non_destructive(sxe, node);
 	if (node) {
 		namelen = xmlStrlen(node->name);
-		RETURN_STRINGL_FAST((const char *) node->name, namelen);
+		zend_string *str = zend_string_finit_fast((const char *)node->name, namelen, /* fallible */ true);
+		if (!str) {
+			RETURN_OOM();
+		}
+		RETURN_STR(str);
 	} else {
 		RETURN_EMPTY_STRING();
 	}
@@ -1664,6 +1717,7 @@ PHP_METHOD(SimpleXMLElement, addChild)
 	xmlNsPtr        nsptr = NULL;
 	xmlChar        *localname, *prefix = NULL;
 	bool            free_localname = false;
+	const xmlChar  *retprefix = NULL;
 
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "s|s!s!",
 		&qname, &qname_len, &value, &value_len, &nsuri, &nsuri_len) == FAILURE) {
@@ -1714,7 +1768,11 @@ PHP_METHOD(SimpleXMLElement, addChild)
 		}
 	}
 
-	node_as_zval_str(sxe, newnode, return_value, SXE_ITER_NONE, localname, prefix, 0);
+	if ((prefix != NULL || nsuri != NULL) && newnode->ns != NULL) {
+		retprefix = newnode->ns->prefix;
+	}
+
+	node_as_zval_str(sxe, newnode, return_value, SXE_ITER_NONE, localname, retprefix, 1);
 
 	if (free_localname) {
 		xmlFree(localname);
@@ -1802,7 +1860,9 @@ out:
 static zend_result cast_object(zval *object, int type, char *contents)
 {
 	if (contents) {
-		ZVAL_STRINGL(object, contents, strlen(contents));
+		if (UNEXPECTED(!ZVAL_FSTRINGL(object, contents, strlen(contents)))) {
+			return FAILURE;
+		}
 	} else {
 		ZVAL_NULL(object);
 	}
@@ -1898,9 +1958,10 @@ PHP_METHOD(SimpleXMLElement, __toString)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
 
-	zend_result rv = sxe_object_cast_ex(Z_OBJ_P(ZEND_THIS), return_value, IS_STRING);
-	ZEND_IGNORE_VALUE(rv);
-	ZEND_ASSERT(rv == SUCCESS);
+	if (sxe_object_cast_ex(Z_OBJ_P(ZEND_THIS), return_value, IS_STRING) != SUCCESS) {
+		zval_ptr_dtor(return_value);
+		RETURN_EMPTY_STRING();
+	}
 }
 /* }}} */
 
@@ -2008,7 +2069,7 @@ PHP_METHOD(SimpleXMLElement, key)
 	}
 
 	curnode = intern->node->node;
-	RETURN_STRINGL_FAST((char*)curnode->name, xmlStrlen(curnode->name));
+	RETURN_FSTRINGL((const char *)curnode->name, xmlStrlen(curnode->name));
 }
 /* }}} */
 
@@ -2122,7 +2183,7 @@ static void sxe_object_free_storage(zend_object *object)
 
 	if (sxe->properties) {
 		ZEND_ASSERT(!(GC_FLAGS(sxe->properties) & IS_ARRAY_IMMUTABLE));
-		zend_hash_release(sxe->properties);
+		zend_array_release(sxe->properties);
 	}
 }
 /* }}} */
@@ -2275,18 +2336,17 @@ PHP_FUNCTION(simplexml_load_string)
 PHP_METHOD(SimpleXMLElement, __construct)
 {
 	php_sxe_object *sxe = Z_SXEOBJ_P(ZEND_THIS);
-	char           *data;
+	zend_string    *data;
 	zend_string    *ns = zend_empty_string;
-	size_t             data_len;
 	xmlDocPtr       docp;
 	zend_long            options = 0;
 	bool       is_url = false, isprefix = false;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "s|lbSb", &data, &data_len, &options, &is_url, &ns, &isprefix) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "P|lbSb", &data, &options, &is_url, &ns, &isprefix) == FAILURE) {
 		RETURN_THROWS();
 	}
 
-	if (ZEND_SIZE_T_INT_OVFL(data_len)) {
+	if (ZEND_SIZE_T_INT_OVFL(ZSTR_LEN(data))) {
 		zend_argument_error(zend_ce_exception, 1, "is too long");
 		RETURN_THROWS();
 	}
@@ -2300,7 +2360,7 @@ PHP_METHOD(SimpleXMLElement, __construct)
 	}
 
 	PHP_LIBXML_SANITIZE_GLOBALS(read_file_or_memory);
-	docp = is_url ? xmlReadFile(data, NULL, (int)options) : xmlReadMemory(data, (int)data_len, NULL, NULL, (int)options);
+	docp = is_url ? xmlReadFile(ZSTR_VAL(data), NULL, (int)options) : xmlReadMemory(ZSTR_VAL(data), (int)ZSTR_LEN(data), NULL, NULL, (int)options);
 	PHP_LIBXML_RESTORE_GLOBALS(read_file_or_memory);
 
 	if (!docp) {

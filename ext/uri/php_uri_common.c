@@ -40,6 +40,24 @@ static zend_string *get_known_string_by_property_name(php_uri_property_name prop
 	}
 }
 
+ZEND_ATTRIBUTE_NONNULL_ARGS(2) zend_result php_uri_pass_errors_by_ref_and_free(zval *errors_zv, HashTable *errors)
+{
+	/* The pass-by ref argument stored by errors_zv was not passed - the URI
+	 * implementation either doesn't support returning additional error information,
+	 * or the caller is not interested in it */
+	if (errors_zv == NULL) {
+		zend_array_release(errors);
+		return SUCCESS;
+	}
+
+	ZEND_TRY_ASSIGN_REF_ARR(errors_zv, errors);
+	if (EG(exception)) {
+		return FAILURE;
+	}
+
+	return SUCCESS;
+}
+
 void php_uri_property_read_helper(INTERNAL_FUNCTION_PARAMETERS, php_uri_property_name property_name, php_uri_component_read_mode component_read_mode)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
@@ -50,7 +68,11 @@ void php_uri_property_read_helper(INTERNAL_FUNCTION_PARAMETERS, php_uri_property
 	const php_uri_property_handler *property_handler = php_uri_parser_property_handler_by_name(uri_object->parser, property_name);
 
 	if (UNEXPECTED(property_handler->read(uri_object->uri, component_read_mode, return_value) == FAILURE)) {
-		zend_throw_exception_ex(php_uri_ce_error, 0, "The %s component cannot be retrieved", ZSTR_VAL(get_known_string_by_property_name(property_name)));
+		if (ZEND_HAS_OOM()) {
+			zend_handle_delayed_oom();
+			RETURN_THROWS();
+		}
+		zend_throw_exception_ex(php_uri_ce_error, 0, "The %pS component cannot be retrieved", get_known_string_by_property_name(property_name));
 		RETURN_THROWS();
 	}
 }

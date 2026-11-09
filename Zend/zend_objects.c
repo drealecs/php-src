@@ -115,7 +115,7 @@ ZEND_API void zend_objects_destroy_object(zend_object *object)
 	zend_function *destructor = object->ce->destructor;
 
 	if (destructor) {
-		if (UNEXPECTED(zend_object_is_lazy(object))) {
+		if (UNEXPECTED(zend_object_is_lazy(object) || ZEND_HAS_OOM())) {
 			return;
 		}
 
@@ -129,8 +129,8 @@ ZEND_API void zend_objects_destroy_object(zend_object *object)
 				ZEND_ASSERT(!(destructor->common.fn_flags & ZEND_ACC_PUBLIC));
 				if (!zend_check_method_accessible(destructor, scope)) {
 					zend_throw_error(NULL,
-						"Call to %s %s::__destruct() from %s%s",
-						zend_visibility_string(destructor->common.fn_flags), ZSTR_VAL(object->ce->name),
+						"Call to %s %pS::__destruct() from %s%s",
+						zend_visibility_string(destructor->common.fn_flags), object->ce->name,
 						scope ? "scope " : "global scope",
 						scope ? ZSTR_VAL(scope->name) : ""
 					);
@@ -138,8 +138,8 @@ ZEND_API void zend_objects_destroy_object(zend_object *object)
 				}
 			} else {
 				zend_error(E_WARNING,
-					"Call to %s %s::__destruct() from global scope during shutdown ignored",
-					zend_visibility_string(destructor->common.fn_flags), ZSTR_VAL(object->ce->name));
+					"Call to %s %pS::__destruct() from global scope during shutdown ignored",
+					zend_visibility_string(destructor->common.fn_flags), object->ce->name);
 				return;
 			}
 		}
@@ -193,6 +193,36 @@ ZEND_API zend_object* ZEND_FASTCALL zend_objects_new(zend_class_entry *ce)
 	return object;
 }
 
+ZEND_API zend_object* ZEND_FASTCALL zend_objects_fnew(zend_class_entry *ce)
+{
+	zend_object *object = femalloc(sizeof(zend_object) + zend_object_properties_size(ce), /* fallible */ true);
+	if (UNEXPECTED(!object)) {
+		return NULL;
+	}
+
+	_zend_object_std_init(object, ce);
+	object->handlers = &std_object_handlers;
+	return object;
+}
+
+ZEND_API void ZEND_FASTCALL zend_object_set_properties_reinitable(zend_object *object, bool reinitable)
+{
+	if (!ZEND_CLASS_HAS_READONLY_PROPS(object->ce)) {
+		return;
+	}
+
+	for (uint32_t i = 0; i < object->ce->default_properties_count; i++) {
+		zval *prop = OBJ_PROP_NUM(object, i);
+		if (reinitable) {
+			if (!Z_ISUNDEF_P(prop)) {
+				Z_PROP_FLAG_P(prop) |= IS_PROP_REINITABLE;
+			}
+		} else {
+			Z_PROP_FLAG_P(prop) &= ~IS_PROP_REINITABLE;
+		}
+	}
+}
+
 ZEND_API void ZEND_FASTCALL zend_objects_clone_members(zend_object *new_object, const zend_object *old_object)
 {
 	bool has_clone_method = old_object->ce->clone != NULL;
@@ -206,10 +236,6 @@ ZEND_API void ZEND_FASTCALL zend_objects_clone_members(zend_object *new_object, 
 			i_zval_ptr_dtor(dst);
 			ZVAL_COPY_VALUE_PROP(dst, src);
 			zval_add_ref(dst);
-			if (has_clone_method) {
-				/* Unconditionally add the IS_PROP_REINITABLE flag to avoid a potential cache miss of property_info */
-				Z_PROP_FLAG_P(dst) |= IS_PROP_REINITABLE;
-			}
 
 			if (UNEXPECTED(Z_ISREF_P(dst)) &&
 					(ZEND_DEBUG || ZEND_REF_HAS_TYPE_SOURCES(Z_REF_P(dst)))) {
@@ -255,10 +281,7 @@ ZEND_API void ZEND_FASTCALL zend_objects_clone_members(zend_object *new_object, 
 				ZVAL_COPY_VALUE(&new_prop, prop);
 				zval_add_ref(&new_prop);
 			}
-			if (has_clone_method) {
-				/* Unconditionally add the IS_PROP_REINITABLE flag to avoid a potential cache miss of property_info */
-				Z_PROP_FLAG_P(&new_prop) |= IS_PROP_REINITABLE;
-			}
+
 			if (EXPECTED(key)) {
 				_zend_hash_append(new_object->properties, key, &new_prop);
 			} else {
@@ -268,15 +291,9 @@ ZEND_API void ZEND_FASTCALL zend_objects_clone_members(zend_object *new_object, 
 	}
 
 	if (has_clone_method) {
+		zend_object_set_properties_reinitable(new_object, /* reinitable */ true);
 		zend_call_known_instance_method_with_0_params(new_object->ce->clone, new_object, NULL);
-
-		if (ZEND_CLASS_HAS_READONLY_PROPS(new_object->ce)) {
-			for (uint32_t i = 0; i < new_object->ce->default_properties_count; i++) {
-				zval* prop = OBJ_PROP_NUM(new_object, i);
-				/* Unconditionally remove the IS_PROP_REINITABLE flag to avoid a potential cache miss of property_info */
-				Z_PROP_FLAG_P(prop) &= ~IS_PROP_REINITABLE;
-			}
-		}
+		zend_object_set_properties_reinitable(new_object, /* reinitable */ false);
 	}
 }
 
@@ -285,13 +302,8 @@ ZEND_API zend_object *zend_objects_clone_obj_with(zend_object *old_object, const
 	zend_object *new_object = old_object->handlers->clone_obj(old_object);
 
 	if (EXPECTED(!EG(exception))) {
-		/* Unlock readonly properties once more. */
-		if (ZEND_CLASS_HAS_READONLY_PROPS(new_object->ce)) {
-			for (uint32_t i = 0; i < new_object->ce->default_properties_count; i++) {
-				zval* prop = OBJ_PROP_NUM(new_object, i);
-				Z_PROP_FLAG_P(prop) |= IS_PROP_REINITABLE;
-			}
-		}
+
+		zend_object_set_properties_reinitable(new_object, /* reinitable */ true);
 
 		const zend_class_entry *old_scope = EG(fake_scope);
 
@@ -321,6 +333,8 @@ ZEND_API zend_object *zend_objects_clone_obj_with(zend_object *old_object, const
 		} ZEND_HASH_FOREACH_END();
 
 		EG(fake_scope) = old_scope;
+
+		zend_object_set_properties_reinitable(new_object, /* reinitable */ false);
 	}
 
 	return new_object;

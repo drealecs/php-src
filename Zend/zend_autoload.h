@@ -24,6 +24,8 @@
 #include "zend.h"
 
 ZEND_API zend_class_entry *zend_perform_class_autoload(zend_string *class_name, zend_string *lc_name);
+ZEND_API zend_class_entry *zend_perform_class_autoload_in_runtime_module(zend_runtime_module *runtime_module, zend_string *class_name, zend_string *lc_name);
+ZEND_API void zend_autoload_callback_zval_destroy(zval *element);
 ZEND_API void zend_autoload_register_class_loader(zend_fcall_info_cache *fcc, bool prepend);
 ZEND_API bool zend_autoload_unregister_class_loader(const zend_fcall_info_cache *fcc);
 ZEND_API void zend_autoload_fcc_map_to_callable_zval_map(zval *return_value);

@@ -26,7 +26,7 @@ PHPAPI char *
 php_canonicalize_version(const char *version)
 {
 	size_t len = strlen(version);
-	char *buf = safe_emalloc(len, 2, 1), *q, lp, lq;
+	char *buf = safe_emalloc(len * 2, sizeof(char), 1), *q, lp, lq;
 	const char *p;
 
 	if (len == 0) {
@@ -215,8 +215,8 @@ PHP_FUNCTION(version_compare)
 	int compare;
 
 	ZEND_PARSE_PARAMETERS_START(2, 3)
-		Z_PARAM_STRING(v1, v1_len)
-		Z_PARAM_STRING(v2, v2_len)
+		Z_PARAM_PATH(v1, v1_len)
+		Z_PARAM_PATH(v2, v2_len)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_STR_OR_NULL(op)
 	ZEND_PARSE_PARAMETERS_END();

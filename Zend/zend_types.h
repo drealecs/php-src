@@ -525,38 +525,50 @@ static zend_always_inline void HT_HASH_RESET(HashTable *ht) {
 	size_t size = HT_HASH_SIZE(ht->nTableMask);
 
 #if defined(__AVX2__)
-	__m256i ymm0 = _mm256_setzero_si256();
-	ymm0 = _mm256_cmpeq_epi64(ymm0, ymm0);
-	ZEND_ASSERT(size >= 64 && ((size & 0x3f) == 0));
-	do {
-		_mm256_storeu_si256((__m256i*)p, ymm0);
-		_mm256_storeu_si256((__m256i*)(p+32), ymm0);
-		p += 64;
-		size -= 64;
-	} while (size != 0);
+	if (UNEXPECTED(size < 64)) {
+		memset(p, HT_INVALID_IDX, size);
+	} else {
+		__m256i ymm0 = _mm256_setzero_si256();
+		ymm0 = _mm256_cmpeq_epi64(ymm0, ymm0);
+		ZEND_ASSERT(size >= 64 && ((size & 0x3f) == 0));
+		do {
+			_mm256_storeu_si256((__m256i*)p, ymm0);
+			_mm256_storeu_si256((__m256i*)(p+32), ymm0);
+			p += 64;
+			size -= 64;
+		} while (size != 0);
+	}
 #elif defined(__SSE2__)
-	__m128i xmm0 = _mm_setzero_si128();
-	xmm0 = _mm_cmpeq_epi8(xmm0, xmm0);
-	ZEND_ASSERT(size >= 64 && ((size & 0x3f) == 0));
-	do {
-		_mm_storeu_si128((__m128i*)p, xmm0);
-		_mm_storeu_si128((__m128i*)(p+16), xmm0);
-		_mm_storeu_si128((__m128i*)(p+32), xmm0);
-		_mm_storeu_si128((__m128i*)(p+48), xmm0);
-		p += 64;
-		size -= 64;
-	} while (size != 0);
+	if (UNEXPECTED(size < 64)) {
+		memset(p, HT_INVALID_IDX, size);
+	} else {
+		__m128i xmm0 = _mm_setzero_si128();
+		xmm0 = _mm_cmpeq_epi8(xmm0, xmm0);
+		ZEND_ASSERT(size >= 64 && ((size & 0x3f) == 0));
+		do {
+			_mm_storeu_si128((__m128i*)p, xmm0);
+			_mm_storeu_si128((__m128i*)(p+16), xmm0);
+			_mm_storeu_si128((__m128i*)(p+32), xmm0);
+			_mm_storeu_si128((__m128i*)(p+48), xmm0);
+			p += 64;
+			size -= 64;
+		} while (size != 0);
+	}
 #elif defined(__aarch64__) || defined(_M_ARM64)
-	int32x4_t t = vdupq_n_s32(-1);
-	ZEND_ASSERT(size >= 64 && ((size & 0x3f) == 0));
-	do {
-		vst1q_s32((int32_t*)p, t);
-		vst1q_s32((int32_t*)(p+16), t);
-		vst1q_s32((int32_t*)(p+32), t);
-		vst1q_s32((int32_t*)(p+48), t);
-		p += 64;
-		size -= 64;
-	} while (size != 0);
+	if (UNEXPECTED(size < 64)) {
+		memset(p, HT_INVALID_IDX, size);
+	} else {
+		int32x4_t t = vdupq_n_s32(-1);
+		ZEND_ASSERT(size >= 64 && ((size & 0x3f) == 0));
+		do {
+			vst1q_s32((int32_t*)p, t);
+			vst1q_s32((int32_t*)(p+16), t);
+			vst1q_s32((int32_t*)(p+32), t);
+			vst1q_s32((int32_t*)(p+48), t);
+			p += 64;
+			size -= 64;
+		} while (size != 0);
+	}
 #else
 	memset(p, HT_INVALID_IDX, size);
 #endif
@@ -943,11 +955,28 @@ static zend_always_inline uint32_t zend_gc_delref_ex(zend_refcounted_h *p, uint3
 
 #define IS_OBJ_LAZY_UNINITIALIZED   (1U<<31) /* Virtual proxy or uninitialized Ghost */
 #define IS_OBJ_LAZY_PROXY           (1U<<30) /* Virtual proxy (may be initialized) */
+#define OBJ_EXTRA_FLAG_PRIV_1       (1U<<29) /* Reserved for private use by the object itself */
+#define OBJ_EXTRA_FLAG_PRIV_2       (1U<<28) /* Reserved for private use by the object itself */
 
 #define OBJ_EXTRA_FLAGS(obj)		((obj)->extra_flags)
 
 /* Fast class cache */
-#define ZSTR_HAS_CE_CACHE(s)		(GC_FLAGS(s) & IS_STR_CLASS_NAME_MAP_PTR)
+static zend_always_inline bool zstr_has_ce_cache(const zend_string *s)
+{
+#if defined(__cplusplus) || !defined(ATOMIC_INT_LOCK_FREE) || ATOMIC_INT_LOCK_FREE != 2
+	uint32_t type_info = *(const volatile uint32_t *)&GC_TYPE_INFO(s);
+	atomic_thread_fence(memory_order_acquire);
+#else
+	static_assert(sizeof(_Atomic(uint32_t)) == sizeof(uint32_t), "atomic size");
+	static_assert(alignof(_Atomic(uint32_t)) == alignof(uint32_t), "atomic align");
+
+	uint32_t type_info = atomic_load_explicit((_Atomic(uint32_t) *)&GC_TYPE_INFO(s), memory_order_acquire);
+#endif
+
+	return (type_info & (IS_STR_CLASS_NAME_MAP_PTR << GC_FLAGS_SHIFT)) != 0;
+}
+
+#define ZSTR_HAS_CE_CACHE(s)		zstr_has_ce_cache(s)
 #define ZSTR_GET_CE_CACHE(s)		ZSTR_GET_CE_CACHE_EX(s, 1)
 #define ZSTR_SET_CE_CACHE(s, ce)	ZSTR_SET_CE_CACHE_EX(s, ce, 1)
 

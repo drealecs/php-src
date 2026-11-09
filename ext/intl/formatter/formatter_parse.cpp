@@ -18,13 +18,13 @@
 
 #include <unicode/fmtable.h>
 #include <unicode/curramt.h>
+#include <unicode/ustring.h>
 #include "../intl_convertcpp.h"
 #include "formatter_class.h"
 #include "formatter_format.h"
 
-extern "C" {
 #include "php_intl.h"
-}
+#include "intl_convert.h"
 
 #include <locale.h>
 #include <memory>
@@ -65,6 +65,9 @@ U_CFUNC PHP_FUNCTION( numfmt_parse )
 	icu::UnicodeString ustr;
 	intl_stringFromChar(ustr, str, str_len, &INTL_DATA_ERROR_CODE(nfo));
 	INTL_METHOD_CHECK_STATUS( nfo, "String conversion to UTF-16 failed" );
+	if (zposition && !intl_convert_utf8_offset_to_utf16(str, str_len, &position, &INTL_DATA_ERROR_CODE(nfo))) {
+		INTL_METHOD_CHECK_STATUS(nfo, "Invalid UTF-8 offset");
+	}
 
 #if ICU_LOCALE_BUG && defined(LC_NUMERIC)
 	/* need to copy here since setlocale may change it later */
@@ -122,6 +125,7 @@ U_CFUNC PHP_FUNCTION( numfmt_parse )
 	}
 
 	if (zposition) {
+		position = intl_convert_utf16_offset_to_utf8(ustr.getBuffer(), ustr.length(), position);
 		ZEND_TRY_ASSIGN_REF_LONG(zposition, position);
 	}
 
@@ -167,6 +171,9 @@ U_CFUNC PHP_FUNCTION( numfmt_parse_currency )
 			RETURN_THROWS();
 		}
 		position = (int32_t) long_position;
+		if (!intl_convert_utf8_offset_to_utf16(str, str_len, &position, &INTL_DATA_ERROR_CODE(nfo))) {
+			INTL_METHOD_CHECK_STATUS(nfo, "Invalid UTF-8 offset");
+		}
 	}
 
 	icu::ParsePosition pp(position);
@@ -178,7 +185,8 @@ U_CFUNC PHP_FUNCTION( numfmt_parse_currency )
 	}
 
 	if(zposition) {
-		ZEND_TRY_ASSIGN_REF_LONG(zposition, pp.getIndex());
+		position = intl_convert_utf16_offset_to_utf8(ustr.getBuffer(), ustr.length(), pp.getIndex());
+		ZEND_TRY_ASSIGN_REF_LONG(zposition, position);
 	}
 
 	const double number = currAmt->getNumber().getDouble(INTL_DATA_ERROR_CODE(nfo));

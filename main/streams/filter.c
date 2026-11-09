@@ -30,7 +30,7 @@ PHPAPI HashTable *php_get_stream_filters_hash_global(void)
 }
 
 /* Normal hash selection/retrieval call */
-PHPAPI HashTable *_php_get_stream_filters_hash(void)
+PHPAPI HashTable *php_get_stream_filters_hash(void)
 {
 	return (FG(stream_filters) ? FG(stream_filters) : &stream_filters_hash);
 }
@@ -230,7 +230,7 @@ PHPAPI php_stream_filter *php_stream_filter_create(const char *filtername, zval 
 		/* try a wildcard */
 		char *wildname;
 
-		wildname = safe_emalloc(1, n, 3);
+		wildname = safe_emalloc(n, sizeof(char), 3);
 		memcpy(wildname, filtername, n+1);
 		char *new_period = wildname + (period - filtername);
 		while (new_period && !filter) {
@@ -339,10 +339,11 @@ PHPAPI void php_stream_filter_prepend_ex(php_stream_filter_chain *chain, php_str
 		chain->tail = filter;
 	}
 	chain->head = filter;
+	chain->num_filters += 1;
 	filter->chain = chain;
 }
 
-PHPAPI void _php_stream_filter_prepend(php_stream_filter_chain *chain, php_stream_filter *filter)
+PHPAPI void php_stream_filter_prepend(php_stream_filter_chain *chain, php_stream_filter *filter)
 {
 	php_stream_filter_prepend_ex(chain, filter);
 }
@@ -359,6 +360,7 @@ PHPAPI zend_result php_stream_filter_append_ex(php_stream_filter_chain *chain, p
 		chain->head = filter;
 	}
 	chain->tail = filter;
+	chain->num_filters += 1;
 	filter->chain = chain;
 
 	if (&(stream->readfilters) == chain && (stream->writepos - stream->readpos) > 0) {
@@ -371,7 +373,11 @@ PHPAPI zend_result php_stream_filter_append_ex(php_stream_filter_chain *chain, p
 
 		bucket = php_stream_bucket_new(stream, (char*) stream->readbuf + stream->readpos, stream->writepos - stream->readpos, 0, 0);
 		php_stream_bucket_append(brig_inp, bucket);
+		uint32_t orig_no_remove = stream->flags & PHP_STREAM_FLAG_NO_READ_FILTER_REMOVE;
+		stream->flags |= PHP_STREAM_FLAG_NO_READ_FILTER_REMOVE;
 		status = filter->fops->filter(stream, filter, brig_inp, brig_outp, &consumed, PSFS_FLAG_NORMAL);
+		stream->flags &= ~PHP_STREAM_FLAG_NO_READ_FILTER_REMOVE;
+		stream->flags |= orig_no_remove;
 
 		if (stream->readpos + consumed > (uint32_t)stream->writepos) {
 			/* No behaving filter should cause this. */
@@ -434,7 +440,7 @@ PHPAPI zend_result php_stream_filter_append_ex(php_stream_filter_chain *chain, p
 	return SUCCESS;
 }
 
-PHPAPI void _php_stream_filter_append(php_stream_filter_chain *chain, php_stream_filter *filter)
+PHPAPI void php_stream_filter_append(php_stream_filter_chain *chain, php_stream_filter *filter)
 {
 	if (php_stream_filter_append_ex(chain, filter) != SUCCESS) {
 		if (chain->head == filter) {
@@ -444,10 +450,11 @@ PHPAPI void _php_stream_filter_append(php_stream_filter_chain *chain, php_stream
 			filter->prev->next = NULL;
 			chain->tail = filter->prev;
 		}
+		chain->num_filters -= 1;
 	}
 }
 
-PHPAPI zend_result _php_stream_filter_flush(php_stream_filter *filter, bool finish)
+PHPAPI zend_result php_stream_filter_flush(php_stream_filter *filter, bool finish)
 {
 	php_stream_bucket_brigade brig_a = { NULL, NULL }, brig_b = { NULL, NULL }, *inp = &brig_a, *outp = &brig_b, *brig_temp;
 	php_stream_bucket *bucket;
@@ -464,6 +471,10 @@ PHPAPI zend_result _php_stream_filter_flush(php_stream_filter *filter, bool fini
 
 	chain = filter->chain;
 	stream = chain->stream;
+	uint32_t no_remove_flag = chain == &stream->readfilters ?
+			PHP_STREAM_FLAG_NO_READ_FILTER_REMOVE : PHP_STREAM_FLAG_NO_WRITE_FILTER_REMOVE;
+	uint32_t orig_no_remove = stream->flags & no_remove_flag;
+	stream->flags |= no_remove_flag;
 
 	for(current = filter; current; current = current->next) {
 		php_stream_filter_status_t status;
@@ -471,9 +482,13 @@ PHPAPI zend_result _php_stream_filter_flush(php_stream_filter *filter, bool fini
 		status = current->fops->filter(stream, current, inp, outp, NULL, flags);
 		if (status == PSFS_FEED_ME) {
 			/* We've flushed the data far enough */
+			stream->flags &= ~no_remove_flag;
+			stream->flags |= orig_no_remove;
 			return SUCCESS;
 		}
 		if (status == PSFS_ERR_FATAL) {
+			stream->flags &= ~no_remove_flag;
+			stream->flags |= orig_no_remove;
 			return FAILURE;
 		}
 		/* Otherwise we have data available to PASS_ON
@@ -486,6 +501,8 @@ PHPAPI zend_result _php_stream_filter_flush(php_stream_filter *filter, bool fini
 
 		flags = PSFS_FLAG_NORMAL;
 	}
+	stream->flags &= ~no_remove_flag;
+	stream->flags |= orig_no_remove;
 
 	/* Last filter returned data via PSFS_PASS_ON
 		Do something with it */
@@ -503,9 +520,9 @@ PHPAPI zend_result _php_stream_filter_flush(php_stream_filter *filter, bool fini
 		/* Dump any newly flushed data to the read buffer */
 		if (stream->readpos > 0) {
 			/* Back the buffer up */
-			memcpy(stream->readbuf, stream->readbuf + stream->readpos, stream->writepos - stream->readpos);
-			stream->readpos = 0;
+			memmove(stream->readbuf, stream->readbuf + stream->readpos, stream->writepos - stream->readpos);
 			stream->writepos -= stream->readpos;
+			stream->readpos = 0;
 		}
 		if (flushed_size > (stream->readbuflen - stream->writepos)) {
 			/* Grow the buffer */
@@ -544,6 +561,8 @@ PHPAPI php_stream_filter *php_stream_filter_remove(php_stream_filter *filter, bo
 	} else {
 		filter->chain->tail = filter->prev;
 	}
+
+	filter->chain->num_filters -= 1;
 
 	if (filter->res) {
 		zend_list_delete(filter->res);

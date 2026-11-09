@@ -18,15 +18,9 @@
 
 #include <php.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include "../intl_common.h"
 #include "../intl_error.h"
 #include "../intl_data.h"
-#ifdef __cplusplus
-}
-#endif
 
 #include <unicode/ucol.h>
 
@@ -50,17 +44,25 @@ typedef struct {
 #define php_intl_collator_fetch_object(obj) ZEND_CONTAINER_OF(obj, Collator_object, zo)
 #define Z_INTL_COLLATOR_P(zv) php_intl_collator_fetch_object(Z_OBJ_P(zv))
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void collator_register_Collator_symbols(int module_number);
-void collator_object_init( Collator_object* co );
-void collator_object_destroy( Collator_object* co );
-#ifdef __cplusplus
+static zend_always_inline zend_result collator_check_initialized(Collator_object *co)
+{
+	ZEND_ASSERT(co != NULL);
+
+	if (UNEXPECTED(co->ucoll == NULL)) {
+		intl_error_set_code( NULL, COLLATOR_ERROR_CODE( co ) );
+		intl_errors_set_custom_msg(COLLATOR_ERROR_P( co ), "Object not initialized");
+		zend_throw_error(NULL, "Object not initialized");
+
+		return FAILURE;
+	}
+
+	return SUCCESS;
 }
-#endif
+BEGIN_EXTERN_C()
+void collator_register_Collator_symbols(int module_number);
 
 extern zend_class_entry *Collator_ce_ptr;
+END_EXTERN_C()
 
 /* Auxiliary macros */
 

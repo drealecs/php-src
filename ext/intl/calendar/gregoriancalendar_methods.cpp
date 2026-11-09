@@ -24,16 +24,16 @@
 #include <unicode/gregocal.h>
 #include <unicode/ustring.h>
 
-extern "C" {
 #include "../php_intl.h"
 #include "../intl_common.h"
 #define USE_TIMEZONE_POINTER 1
 #include "../timezone/timezone_class.h"
 #define USE_CALENDAR_POINTER 1
 #include "calendar_class.h"
+BEGIN_EXTERN_C()
 #include <ext/date/php_date.h>
+END_EXTERN_C()
 #include "zend_exceptions.h"
-}
 
 using icu::GregorianCalendar;
 using icu::Locale;
@@ -165,7 +165,6 @@ static void _php_intlgregcal_constructor_body(INTERNAL_FUNCTION_PARAMETERS, bool
 		if (U_FAILURE(status)) {
 			intl_error_set(NULL, status, "error creating ICU "
 				"GregorianCalendar from time zone and locale");
-			delete tz;
 			if (!is_constructor) {
 				zval_ptr_dtor(return_value);
 				RETVAL_NULL();

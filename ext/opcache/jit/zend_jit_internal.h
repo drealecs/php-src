@@ -22,6 +22,7 @@
 #include "Zend/zend_types.h"
 #include "Zend/zend_compile.h"
 #include "Zend/zend_constants.h"
+#include "Zend/zend_runtime_module.h"
 #include "Zend/Optimizer/zend_func_info.h"
 #include "Zend/Optimizer/zend_call_graph.h"
 #include "zend_vm_opcodes.h"
@@ -222,7 +223,7 @@ extern const zend_op *zend_jit_interrupt_op;
 # define ZEND_OPCODE_HANDLER_ARGS_PASSTHRU    EXECUTE_DATA_C OPLINE_CC
 # define ZEND_OPCODE_HANDLER_ARGS_EX          EXECUTE_DATA_D OPLINE_DC,
 # define ZEND_OPCODE_HANDLER_ARGS_PASSTHRU_EX EXECUTE_DATA_C OPLINE_CC,
-# define ZEND_VM_ENTER_BIT 1ULL
+# define ZEND_VM_ENTER_BIT ((uintptr_t)1)
 #endif
 
 /* VM helpers */
@@ -253,6 +254,12 @@ zend_constant* ZEND_FASTCALL zend_jit_get_constant(const zval *key, uint32_t fla
 zend_constant* ZEND_FASTCALL zend_jit_check_constant(const zval *key);
 
 /* Tracer */
+static zend_always_inline bool zend_jit_trace_is_runtime_module_sensitive(zend_execute_data *execute_data)
+{
+	return zend_runtime_context_is_module_sensitive(
+		zend_runtime_module_context(execute_data->runtime_module));
+}
+
 #define zend_jit_opline_hash(opline) \
 	zend_jit_hash(opline)
 

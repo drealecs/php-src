@@ -92,7 +92,6 @@ php_file_globals file_globals;
 # include <fnmatch.h>
 #endif
 
-#include "zend_attributes.h"
 #include "file_arginfo.h"
 
 /* }}} */
@@ -367,9 +366,16 @@ PHP_FUNCTION(get_meta_tags)
 
 	if (value) efree(value);
 	if (name) efree(name);
-	php_stream_close(md.stream);
 
-	php_stream_error_operation_end_for_stream(md.stream);
+	php_stream_context *context = PHP_STREAM_CONTEXT(md.stream);
+	if (context) {
+		GC_ADDREF(context->res);
+	}
+	php_stream_close(md.stream);
+	php_stream_error_operation_end(context);
+	if (context) {
+		zend_list_delete(context->res);
+	}
 }
 /* }}} */
 
@@ -474,6 +480,7 @@ PHP_FUNCTION(file_put_contents)
 		if (php_memnstr(filename, "://", sizeof("://") - 1, filename + filename_len)) {
 			if (strncasecmp(filename, "file://", sizeof("file://") - 1)) {
 				php_error_docref(NULL, E_WARNING, "Exclusive locks may only be set for regular files");
+				php_stream_error_operation_end(context);
 				RETURN_FALSE;
 			}
 		}
@@ -571,10 +578,10 @@ PHP_FUNCTION(file_put_contents)
 			numbytes = -1;
 			break;
 	}
-	php_stream_close(stream);
+	int close_result = php_stream_close(stream);
 	php_stream_error_operation_end(context);
 
-	if (numbytes < 0) {
+	if (numbytes < 0 || close_result) {
 		RETURN_FALSE;
 	}
 
@@ -649,12 +656,18 @@ PHP_FUNCTION(file)
 			do {
 				p++;
 parse_eol:
+				if (ZEND_HAS_OOM()) {
+					break;
+				}
 				add_index_stringl(return_value, i++, s, p-s);
 				s = p;
 			} while ((p = memchr(p, eol_marker, (e-p))));
 		} else {
 			do {
 				int windows_eol = 0;
+				if (ZEND_HAS_OOM()) {
+					break;
+				}
 				if (p != ZSTR_VAL(target_buf) && eol_marker == '\n' && *(p - 1) == '\r') {
 					windows_eol++;
 				}
@@ -668,7 +681,7 @@ parse_eol:
 		}
 
 		/* handle any leftovers of files without new lines */
-		if (s != e) {
+		if (s != e && !ZEND_HAS_OOM()) {
 			p = e;
 			goto parse_eol;
 		}
@@ -775,13 +788,20 @@ PHPAPI PHP_FUNCTION(fclose)
 		RETURN_FALSE;
 	}
 
+	php_stream_context *context = PHP_STREAM_CONTEXT(stream);
+	if (context) {
+		GC_ADDREF(context->res);
+	}
 	php_stream_error_operation_begin();
-	php_stream_free(stream,
+	int free_result = php_stream_free(stream,
 		PHP_STREAM_FREE_KEEP_RSRC |
 		(stream->is_persistent ? PHP_STREAM_FREE_CLOSE_PERSISTENT : PHP_STREAM_FREE_CLOSE));
-	php_stream_error_operation_end_for_stream(stream);
+	php_stream_error_operation_end(context);
+	if (context) {
+		zend_list_delete(context->res);
+	}
 
-	RETURN_TRUE;
+	RETURN_BOOL(!free_result);
 }
 /* }}} */
 
@@ -822,7 +842,7 @@ PHP_FUNCTION(popen)
 
 	fp = VCWD_POPEN(command, posix_mode);
 	if (!fp) {
-		php_error_docref2(NULL, command, posix_mode, E_WARNING, "%s", strerror(errno));
+		php_error_docref(NULL, E_WARNING, "%s", strerror(errno));
 		efree(posix_mode);
 		RETURN_FALSE;
 	}
@@ -831,7 +851,7 @@ PHP_FUNCTION(popen)
 	stream = php_stream_fopen_from_pipe(fp, mode);
 
 	if (stream == NULL)	{
-		php_error_docref2(NULL, command, mode, E_WARNING, "%s", strerror(errno));
+		php_error_docref(NULL, E_WARNING, "%s", strerror(errno));
 		RETVAL_FALSE;
 	} else {
 		php_stream_to_zval(stream, return_value);
@@ -851,11 +871,23 @@ PHP_FUNCTION(pclose)
 		PHP_Z_PARAM_STREAM(stream)
 	ZEND_PARSE_PARAMETERS_END();
 
+	if ((stream->flags & PHP_STREAM_FLAG_NO_FCLOSE) != 0) {
+		php_error_docref(NULL, E_WARNING, "cannot close the provided stream, as it must not be manually closed");
+		RETURN_LONG(-1);
+	}
+
+	php_stream_context *context = PHP_STREAM_CONTEXT(stream);
+	if (context) {
+		GC_ADDREF(context->res);
+	}
 	php_stream_error_operation_begin();
 	FG(pclose_wait) = 1;
 	zend_list_close(stream->res);
 	FG(pclose_wait) = 0;
-	php_stream_error_operation_end_for_stream(stream);
+	php_stream_error_operation_end(context);
+	if (context) {
+		zend_list_delete(context->res);
+	}
 	RETURN_LONG(FG(pclose_ret));
 }
 /* }}} */
@@ -904,8 +936,13 @@ PHPAPI PHP_FUNCTION(fgets)
 			RETURN_FALSE;
 		}
 		// TODO: avoid reallocation ???
-		RETVAL_STRINGL(buf, line_len);
+		/* This copy can double an already large buffer. */
+		str = zend_string_finit(buf, line_len, /* persistent */ false, /* fallible */ true);
 		efree(buf);
+		if (UNEXPECTED(!str)) {
+			RETURN_OOM();
+		}
+		RETVAL_STR(str);
 	} else {
 		if (len <= 0) {
 			zend_argument_value_error(2, "must be greater than 0");
@@ -1387,7 +1424,7 @@ PHPAPI void php_fstat(php_stream *stream, zval *return_value)
 	php_stream_statbuf stat_ssb;
 	zval stat_dev, stat_ino, stat_mode, stat_nlink, stat_uid, stat_gid, stat_rdev,
 		 stat_size, stat_atime, stat_mtime, stat_ctime, stat_blksize, stat_blocks;
-	char *stat_sb_names[13] = {
+	char *stat_sb_names[] = {
 		"dev", "ino", "mode", "nlink", "uid", "gid", "rdev",
 		"size", "atime", "mtime", "ctime", "blksize", "blocks"
 	};
@@ -1396,7 +1433,8 @@ PHPAPI void php_fstat(php_stream *stream, zval *return_value)
 		RETURN_FALSE;
 	}
 
-	array_init(return_value);
+	array_init_size(return_value, 2 * (sizeof(stat_sb_names) / sizeof(*stat_sb_names)));
+	zend_hash_real_init_mixed(Z_ARRVAL_P(return_value));
 
 	ZVAL_LONG(&stat_dev, stat_ssb.sb.st_dev);
 	ZVAL_LONG(&stat_ino, stat_ssb.sb.st_ino);
@@ -1424,19 +1462,19 @@ PHPAPI void php_fstat(php_stream *stream, zval *return_value)
 	ZVAL_LONG(&stat_blocks,-1);
 #endif
 	/* Store numeric indexes in proper order */
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_dev);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_ino);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_mode);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_nlink);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_uid);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_gid);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_rdev);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_size);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_atime);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_mtime);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_ctime);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_blksize);
-	zend_hash_next_index_insert(Z_ARRVAL_P(return_value), &stat_blocks);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_dev);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_ino);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_mode);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_nlink);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_uid);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_gid);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_rdev);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_size);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_atime);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_mtime);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_ctime);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_blksize);
+	zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stat_blocks);
 
 	/* Store string indexes referencing the same zval*/
 	zend_hash_str_add_new(Z_ARRVAL_P(return_value), stat_sb_names[0], strlen(stat_sb_names[0]), &stat_dev);
@@ -1594,8 +1632,8 @@ safe_to_copy:
 		ret = php_stream_copy_to_stream_ex(srcstream, deststream, PHP_STREAM_COPY_ALL, NULL);
 	}
 	php_stream_close(srcstream);
-	if (deststream) {
-		php_stream_close(deststream);
+	if (deststream && php_stream_close(deststream)) {
+		ret = FAILURE;
 	}
 	return ret;
 }
@@ -1903,7 +1941,7 @@ PHPAPI HashTable *php_bc_fgetcsv_empty_line(void)
 	HashTable *values = zend_new_array(1);
 	zval tmp;
 	ZVAL_NULL(&tmp);
-	zend_hash_next_index_insert(values, &tmp);
+	zend_hash_next_index_insert_new(values, &tmp);
 	return values;
 }
 
@@ -1939,6 +1977,11 @@ PHPAPI HashTable *php_fgetcsv(php_stream *stream, char delimiter, char enclosure
 	do {
 		char *comp_end, *hunk_begin;
 		char *tptr = temp;
+
+		/* Each field costs a zval plus a zend_string, so stop once over the limit. */
+		if (ZEND_HAS_OOM()) {
+			break;
+		}
 
 		inc_len = (bptr < limit ? (*bptr == '\0' ? 1 : php_mblen(bptr, limit - bptr)): 0);
 		if (inc_len == 1) {
@@ -2162,7 +2205,7 @@ PHPAPI HashTable *php_fgetcsv(php_stream *stream, char delimiter, char enclosure
 
 		zval z_tmp;
 		ZVAL_STRINGL(&z_tmp, temp, comp_end - temp);
-		zend_hash_next_index_insert(values, &z_tmp);
+		zend_hash_next_index_insert_new(values, &z_tmp);
 	} while (inc_len > 0);
 
 	efree(temp);
@@ -2190,11 +2233,6 @@ PHP_FUNCTION(realpath)
 			RETURN_FALSE;
 		}
 
-#ifdef ZTS
-		if (VCWD_ACCESS(resolved_path_buff, F_OK)) {
-			RETURN_FALSE;
-		}
-#endif
 		RETURN_STRING(resolved_path_buff);
 	} else {
 		RETURN_FALSE;

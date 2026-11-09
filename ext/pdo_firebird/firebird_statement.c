@@ -195,14 +195,13 @@ static int pdo_firebird_stmt_execute(pdo_stmt_t *stmt) /* {{{ */
 
 		/* allocate storage for the output data */
 		if (S->out_sqlda.sqld) {
-			unsigned int i;
-			for (i = 0; i < S->out_sqlda.sqld; i++) {
+			for (ISC_SHORT i = 0; i < S->out_sqlda.sqld; i++) {
 				XSQLVAR *var = &S->out_sqlda.sqlvar[i];
 				if (var->sqlind) {
 					efree(var->sqlind);
 				}
-				var->sqlind = (void*)ecalloc(1, var->sqllen + 2 * sizeof(short));
-				var->sqldata = &((char*)var->sqlind)[sizeof(short)];
+				var->sqlind = (void*)ecalloc(var->sqllen + 2, sizeof(ISC_SHORT));
+				var->sqldata = &((char*)var->sqlind)[sizeof(ISC_SHORT)];
 			}
 		}
 
@@ -332,9 +331,15 @@ static int pdo_firebird_stmt_describe(pdo_stmt_t *stmt, int colno) /* {{{ */
 static int pdo_firebird_stmt_get_column_meta(pdo_stmt_t *stmt, zend_long colno, zval *return_value)
 {
 	pdo_firebird_stmt *S = (pdo_firebird_stmt *) stmt->driver_data;
-	XSQLVAR *var = &S->out_sqlda.sqlvar[colno];
-
+	XSQLVAR *var;
 	enum pdo_param_type param_type;
+
+	if (colno >= stmt->column_count) {
+		ZVAL_EMPTY_ARRAY(return_value);
+		return 1;
+	}
+
+	var = &S->out_sqlda.sqlvar[colno];
 	if (var->sqlscale < 0) {
 		param_type = PDO_PARAM_STR;
 	} else {
@@ -436,6 +441,8 @@ static int php_firebird_fetch_blob(pdo_stmt_t *stmt, int colno, zval *result, IS
 			php_firebird_error_stmt_with_info(stmt, "HY000", strlen("HY000"), msg, strlen(msg));
 			goto fetch_blob_end;
 		}
+	} else {
+		ZVAL_EMPTY_STRING(result);
 	}
 	retval = 1;
 
@@ -764,9 +771,9 @@ static int pdo_firebird_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param
 									*(FB_BOOLEAN*)var->sqldata = (dval != 0) ? FB_TRUE : FB_FALSE;
 									break;
 								default:
-									if (!zend_binary_strncasecmp(Z_STRVAL_P(parameter), Z_STRLEN_P(parameter), "true", 4, 4)) {
+									if (zend_string_equals_literal_ci(Z_STR_P(parameter), "true")) {
 										*(FB_BOOLEAN*)var->sqldata = FB_TRUE;
-									} else if (!zend_binary_strncasecmp(Z_STRVAL_P(parameter), Z_STRLEN_P(parameter), "false", 5, 5)) {
+									} else if (zend_string_equals_literal_ci(Z_STR_P(parameter), "false")) {
 										*(FB_BOOLEAN*)var->sqldata = FB_FALSE;
 									} else {
 										const char *msg = "Cannot convert string to boolean";

@@ -9,6 +9,7 @@ memory_limit=3G
 if (!getenv('RUN_RESOURCE_HEAVY_TESTS')) die('skip resource-heavy test');
 if (getenv('SKIP_SLOW_TESTS')) die('skip slow test');
 if (PHP_INT_SIZE != 8) die('skip 64-bit only');
+if (PHP_DEBUG) die('skip Times out in debug builds');
 ?>
 --FILE--
 <?php
@@ -18,5 +19,6 @@ metaphone($str, 1);
 
 ?>
 ===DONE===
---EXPECT--
+--EXPECTF--
+Deprecated: Function metaphone() is deprecated since 8.6, use a userland phonetic matching library instead in %s on line %d
 ===DONE===

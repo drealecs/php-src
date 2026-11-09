@@ -5,7 +5,7 @@ date.timezone=Atlantic/Azores
 --EXTENSIONS--
 intl
 --SKIPIF--
-<?php if (version_compare(INTL_ICU_VERSION, '72.1') < 0) die('skip for ICU >= 72.1'); ?>
+<?php if (version_compare(INTL_ICU_VERSION, '72.1') < 0) die('skip requires ICU >= 72.1'); ?>
 --FILE--
 <?php
 
@@ -37,7 +37,7 @@ function ut_main()
 	try {
         	ut_datefmt_set_timezone_id( $fmt , $timezone_id_entry );
 	} catch (IntlException $e) {
-		echo $e->getMessage() . PHP_EOL;
+		echo $e::class, ': ', $e->getMessage(), PHP_EOL;
 	}
         $timezone_id = ut_datefmt_get_timezone_id( $fmt );
         $res_str .= "\nAfter call to set_timezone_id :  timezone_id= $timezone_id";

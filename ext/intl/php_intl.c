@@ -42,6 +42,8 @@
 #include "locale/locale_class.h"
 
 #include "listformatter/listformatter_class.h"
+#include "reldateformatter/reldateformatter_class.h"
+#include "numberformatter/numberformatter_class.h"
 #include "rangeformatter/rangeformatter_class.h"
 
 #include "dateformat/dateformat.h"
@@ -75,7 +77,6 @@
 
 #include "php_ini.h"
 
-#include "zend_attributes.h"
 
 #include "php_intl_arginfo.h"
 
@@ -190,7 +191,13 @@ PHP_MINIT_FUNCTION( intl )
 	/* Register 'ListFormatter' PHP class */
 	listformatter_register_class(  );
 
+	/* Register 'IntlRelativeDateTimeFormatter' PHP class */
+	reldateformatter_register_class(  );
+
 #if U_ICU_VERSION_MAJOR_NUM >= 63
+	/* Register 'IntlNumberFormatter' PHP class */
+	numberformatter_register_class( );
+
 	/* Register 'NumberRangeFormatter' PHP class */
 	rangeformatter_register_class( );
 #endif
@@ -278,6 +285,7 @@ PHP_RINIT_FUNCTION( intl )
 PHP_RSHUTDOWN_FUNCTION( intl )
 {
 	INTL_G(current_collator) = NULL;
+	INTL_G(current_collator_error) = NULL;
 	if (INTL_G(grapheme_iterator)) {
 		grapheme_close_global_iterator(  );
 		INTL_G(grapheme_iterator) = NULL;

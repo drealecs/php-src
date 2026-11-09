@@ -20,6 +20,7 @@
 #include "zend_API.h"
 #include "zend_constants.h"
 #include "zend_inheritance.h"
+#include "zend_runtime_module.h"
 #include "zend_accelerator_util_funcs.h"
 #include "zend_persist.h"
 #include "zend_shared_alloc.h"
@@ -92,6 +93,10 @@ void zend_accel_move_user_functions(HashTable *src, uint32_t count, zend_script 
 		function = Z_PTR(p->val);
 		if (EXPECTED(function->type == ZEND_USER_FUNCTION)
 		 && EXPECTED(function->op_array.filename == filename)) {
+			if (EG(runtime_module_root_context)) {
+				zend_runtime_context_remove_visible_function(
+					zend_get_root_runtime_context(), p->key, function);
+			}
 			_zend_hash_append_ptr(dst, p->key, function);
 			zend_hash_del_bucket(src, p);
 		}
@@ -123,6 +128,10 @@ void zend_accel_move_user_classes(HashTable *src, uint32_t count, zend_script *s
 		ce = Z_PTR(p->val);
 		if (EXPECTED(ce->type == ZEND_USER_CLASS)
 		 && EXPECTED(ce->info.user.filename == filename)) {
+			if (EG(runtime_module_root_context) && p->key
+					&& ZSTR_LEN(p->key) != 0 && ZSTR_VAL(p->key)[0] != '\0') {
+				zend_runtime_module_remove_visible_class(ce->runtime_module, p->key, ce);
+			}
 			_zend_hash_append_ptr(dst, p->key, ce);
 			zend_hash_del_bucket(src, p);
 		}
@@ -147,6 +156,10 @@ static zend_always_inline void _zend_accel_function_hash_copy(HashTable *target,
 			goto failure;
 		}
 		_zend_hash_append_ptr_ex(target, p->key, Z_PTR(p->val), 1);
+		if (target == CG(function_table) && EG(runtime_module_root_context)) {
+			zend_runtime_context_add_visible_function(
+				zend_get_root_runtime_context(), p->key, Z_PTR(p->val));
+		}
 		if (UNEXPECTED(call_observers) && *ZSTR_VAL(p->key)) { // if not rtd key
 			_zend_observer_function_declared_notify(Z_PTR(p->val), p->key);
 		}
@@ -220,6 +233,10 @@ static zend_always_inline void _zend_accel_class_hash_copy(HashTable *target, co
 		} else {
 			zend_class_entry *ce = Z_PTR(p->val);
 			_zend_hash_append_ptr_ex(target, p->key, Z_PTR(p->val), 1);
+			if (target == CG(class_table) && EG(runtime_module_root_context)
+					&& ZSTR_LEN(p->key) != 0 && ZSTR_VAL(p->key)[0] != '\0') {
+				zend_runtime_module_add_visible_class(ce->runtime_module, p->key, ce);
+			}
 			if ((ce->ce_flags & ZEND_ACC_LINKED) && ZSTR_VAL(p->key)[0]) {
 				if (ZSTR_HAS_CE_CACHE(ce->name)) {
 					ZSTR_SET_CE_CACHE_EX(ce->name, ce, 0);

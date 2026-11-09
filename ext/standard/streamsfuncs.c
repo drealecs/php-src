@@ -21,6 +21,7 @@
 #include "streamsfuncs.h"
 #include "php_network.h"
 #include "php_string.h"
+#include "streams/php_streams_int.h"
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -139,7 +140,9 @@ PHP_FUNCTION(stream_socket_client)
 	context = php_stream_context_from_zval(zcontext, flags & PHP_FILE_NO_DEFAULT_CONTEXT);
 
 	if (flags & PHP_STREAM_CLIENT_PERSISTENT) {
-		spprintf(&hashkey, 0, "stream_socket_client__%s", ZSTR_VAL(host));
+		zend_string *escaped = php_stream_escape_persistent_key(ZSTR_VAL(host), ZSTR_LEN(host));
+		spprintf(&hashkey, 0, "stream_socket_client__%s", ZSTR_VAL(escaped));
+		zend_string_release_ex(escaped, false);
 	}
 
 	/* prepare the timeout value for use */
@@ -176,7 +179,7 @@ PHP_FUNCTION(stream_socket_client)
 		/* host might contain binary characters */
 		zend_string *quoted_host = php_addslashes(host);
 
-		php_error_docref(NULL, E_WARNING, "Unable to connect to %s (%s)", ZSTR_VAL(quoted_host), errstr == NULL ? "Unknown error" : ZSTR_VAL(errstr));
+		php_error_docref(NULL, E_WARNING, "Unable to connect to %pS (%s)", quoted_host, errstr == NULL ? "Unknown error" : ZSTR_VAL(errstr));
 		zend_string_release_ex(quoted_host, 0);
 	}
 
@@ -560,7 +563,6 @@ PHP_FUNCTION(stream_get_meta_data)
 		add_assoc_bool(return_value, "blocked", 1);
 		add_assoc_bool(return_value, "eof", php_stream_eof(stream));
 	}
-	php_stream_error_operation_end_for_stream(stream);
 
 	if (!Z_ISUNDEF(stream->wrapperdata)) {
 		Z_ADDREF_P(&stream->wrapperdata);
@@ -595,6 +597,7 @@ PHP_FUNCTION(stream_get_meta_data)
 		add_assoc_string(return_value, "uri", stream->orig_path);
 	}
 
+	php_stream_error_operation_end_for_stream(stream);
 }
 /* }}} */
 
@@ -645,7 +648,7 @@ PHP_FUNCTION(stream_clear_errors)
 }
 
 /* {{{ stream_select related functions */
-static int stream_array_to_fd_set(const HashTable *stream_array, fd_set *fds, php_socket_t *max_fd)
+static int stream_array_to_fd_set(const HashTable *stream_array, php_growable_fd_set *fds, php_socket_t *max_fd)
 {
 	zval *elem;
 	php_stream *stream;
@@ -669,7 +672,7 @@ static int stream_array_to_fd_set(const HashTable *stream_array, fd_set *fds, ph
 		 * */
 		if (SUCCESS == php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL, (void*)&this_fd, 1) && this_fd != -1) {
 
-			PHP_SAFE_FD_SET(this_fd, fds);
+			php_growable_fd_set_add(fds, this_fd);
 
 			if (this_fd > *max_fd) {
 				*max_fd = this_fd;
@@ -680,19 +683,14 @@ static int stream_array_to_fd_set(const HashTable *stream_array, fd_set *fds, ph
 	return cnt ? 1 : 0;
 }
 
-static int stream_array_from_fd_set(zval *stream_array, const fd_set *fds)
+static int stream_array_from_fd_set(zval *stream_array, const php_growable_fd_set *fds)
 {
-	zval *elem, *dest_elem;
-	HashTable *ht;
-	php_stream *stream;
-	int ret = 0;
-	zend_string *key;
-	zend_ulong num_ind;
-
 	ZEND_ASSERT(Z_TYPE_P(stream_array) == IS_ARRAY);
-	ht = zend_new_array(zend_hash_num_elements(Z_ARRVAL_P(stream_array)));
+	HashTable *ht = zend_new_array(zend_hash_num_elements(Z_ARRVAL_P(stream_array)));
+	int ret = 0;
 
-	ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(stream_array), num_ind, key, elem) {
+	ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(stream_array), zend_ulong num_ind, zend_string *key, zval *elem) {
+		php_stream *stream;
 		php_socket_t this_fd;
 
 		ZVAL_DEREF(elem);
@@ -706,7 +704,8 @@ static int stream_array_from_fd_set(zval *stream_array, const fd_set *fds)
 		 * is not displayed.
 		 */
 		if (SUCCESS == php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL, (void*)&this_fd, 1) && this_fd != SOCK_ERR) {
-			if (PHP_SAFE_FD_ISSET(this_fd, fds)) {
+			if (php_growable_fd_set_isset(fds, this_fd)) {
+				zval *dest_elem;
 				if (!key) {
 					dest_elem = zend_hash_index_update(ht, num_ind, elem);
 				} else {
@@ -777,15 +776,9 @@ static int stream_array_emulate_read_fd_set(zval *stream_array)
 PHP_FUNCTION(stream_select)
 {
 	zval *r_array, *w_array, *e_array, *zcontext = NULL;
-	struct timeval tv, *tv_p = NULL;
-	fd_set rfds, wfds, efds;
-	php_socket_t max_fd = 0;
-	int retval, sets = 0;
 	zend_long sec, usec = 0;
 	bool secnull;
 	bool usecnull = 1;
-	int set_count, max_set_count = 0;
-	php_stream_context *context = NULL;
 
 	ZEND_PARSE_PARAMETERS_START(4, 6)
 		Z_PARAM_ARRAY_EX2(r_array, 1, 1, 0)
@@ -797,62 +790,52 @@ PHP_FUNCTION(stream_select)
 		Z_PARAM_RESOURCE_OR_NULL(zcontext)
 	ZEND_PARSE_PARAMETERS_END();
 
-	FD_ZERO(&rfds);
-	FD_ZERO(&wfds);
-	FD_ZERO(&efds);
-
 	php_stream_error_operation_begin();
-	context = php_stream_context_from_zval(zcontext, 0);
+	php_stream_context *context = php_stream_context_from_zval(zcontext, 0);
 
+	/* The sets grow as streams are added, past FD_SETSIZE */
+	php_growable_fd_set rfds, wfds, efds;
+	php_growable_fd_set_init(&rfds, FD_SETSIZE);
+	php_growable_fd_set_init(&wfds, FD_SETSIZE);
+	php_growable_fd_set_init(&efds, FD_SETSIZE);
+
+	php_socket_t max_fd = 0;
+	int sets = 0;
 	if (r_array != NULL) {
-		set_count = stream_array_to_fd_set(Z_ARR_P(r_array), &rfds, &max_fd);
-		if (set_count > max_set_count)
-			max_set_count = set_count;
-		sets += set_count;
+		sets += stream_array_to_fd_set(Z_ARR_P(r_array), &rfds, &max_fd);
 	}
-
 	if (w_array != NULL) {
-		set_count = stream_array_to_fd_set(Z_ARR_P(w_array), &wfds, &max_fd);
-		if (set_count > max_set_count)
-			max_set_count = set_count;
-		sets += set_count;
+		sets += stream_array_to_fd_set(Z_ARR_P(w_array), &wfds, &max_fd);
 	}
-
 	if (e_array != NULL) {
-		set_count = stream_array_to_fd_set(Z_ARR_P(e_array), &efds, &max_fd);
-		if (set_count > max_set_count)
-			max_set_count = set_count;
-		sets += set_count;
+		sets += stream_array_to_fd_set(Z_ARR_P(e_array), &efds, &max_fd);
 	}
 
 	if (!sets) {
 		php_stream_error_operation_end(context);
 		zend_value_error("No stream arrays were passed");
-		RETURN_THROWS();
-	}
-
-	if (!PHP_SAFE_MAX_FD(max_fd, max_set_count)) {
-		RETURN_FALSE;
+		goto cleanup;
 	}
 
 	if (secnull && !usecnull) {
 		if (usec != 0) {
 			php_stream_error_operation_end(context);
 			zend_argument_value_error(5, "must be null when argument #4 ($seconds) is null");
-			RETURN_THROWS();
+			goto cleanup;
 		}
 	}
 
 	/* If seconds is not set to null, build the timeval, else we wait indefinitely */
+	struct timeval tv, *tv_p = NULL;
 	if (!secnull) {
 		if (sec < 0) {
 			php_stream_error_operation_end(context);
 			zend_argument_value_error(4, "must be greater than or equal to 0");
-			RETURN_THROWS();
+			goto cleanup;
 		} else if (usec < 0) {
 			php_stream_error_operation_end(context);
 			zend_argument_value_error(5, "must be greater than or equal to 0");
-			RETURN_THROWS();
+			goto cleanup;
 		}
 
 		/* Windows, Solaris and BSD do not like microsecond values which are >= 1 sec */
@@ -864,6 +847,7 @@ PHP_FUNCTION(stream_select)
 	/* slight hack to support buffered data; if there is data sitting in the
 	 * read buffer of any of the streams in the read array, let's pretend
 	 * that we selected, but return only the readable sockets */
+	int retval;
 	if (r_array != NULL) {
 		retval = stream_array_emulate_read_fd_set(r_array);
 		if (retval > 0) {
@@ -876,24 +860,37 @@ PHP_FUNCTION(stream_select)
 				zval_ptr_dtor(e_array);
 				ZVAL_EMPTY_ARRAY(e_array);
 			}
-			RETURN_LONG(retval);
+			RETVAL_LONG(retval);
+			goto cleanup;
 		}
 	}
 
-	retval = php_select(max_fd+1, &rfds, &wfds, &efds, tv_p);
+#ifndef PHP_WIN32
+	/* select() reads max_fd + 1 bits of each set */
+	php_growable_fd_set_reserve(&rfds, max_fd + 1);
+	php_growable_fd_set_reserve(&wfds, max_fd + 1);
+	php_growable_fd_set_reserve(&efds, max_fd + 1);
+#endif
+	retval = php_select(max_fd + 1, rfds.set, wfds.set, efds.set, tv_p);
 	php_stream_error_operation_end(context);
 
 	if (retval == -1) {
 		php_error_docref(NULL, E_WARNING, "Unable to select [%d]: %s (max_fd=" PHP_SOCKET_FMT ")",
 				errno, strerror(errno), max_fd);
-		RETURN_FALSE;
+		RETVAL_FALSE;
+		goto cleanup;
 	}
 
 	if (r_array != NULL) stream_array_from_fd_set(r_array, &rfds);
 	if (w_array != NULL) stream_array_from_fd_set(w_array, &wfds);
 	if (e_array != NULL) stream_array_from_fd_set(e_array, &efds);
 
-	RETURN_LONG(retval);
+	RETVAL_LONG(retval);
+
+cleanup:
+	php_growable_fd_set_destroy(&rfds);
+	php_growable_fd_set_destroy(&wfds);
+	php_growable_fd_set_destroy(&efds);
 }
 /* }}} */
 
@@ -964,7 +961,7 @@ static zend_result parse_context_params(php_stream_context *context, const HashT
 
 		zend_fcall_info_cache *fcc = emalloc(sizeof(*fcc));
 		char *error;
-		if (!zend_is_callable_ex(tmp, NULL, 0, NULL, fcc, &error)) {
+		if (!zend_is_callable(tmp, fcc, &error)) {
 			zend_argument_type_error(1, "must be an array with valid callbacks as values, %s", error);
 			efree(fcc);
 			efree(error);
@@ -1390,7 +1387,23 @@ PHP_FUNCTION(stream_filter_remove)
 		RETURN_THROWS();
 	}
 
-	if (php_stream_filter_flush(filter, 1) == FAILURE) {
+	if (!filter->chain || !filter->chain->stream) {
+		php_error_docref(NULL, E_WARNING, "Unable to flush filter, not removing");
+		RETURN_FALSE;
+	}
+
+	php_stream *stream = filter->chain->stream;
+	uint32_t no_remove_flag = filter->chain == &stream->readfilters ?
+			PHP_STREAM_FLAG_NO_READ_FILTER_REMOVE : PHP_STREAM_FLAG_NO_WRITE_FILTER_REMOVE;
+	if (stream->flags & no_remove_flag) {
+		php_error_docref(NULL, E_WARNING, "Cannot remove filter while it is being applied");
+		RETURN_FALSE;
+	}
+
+	stream->flags |= no_remove_flag;
+	zend_result flushed = php_stream_filter_flush(filter, 1);
+	stream->flags &= ~no_remove_flag;
+	if (flushed == FAILURE) {
 		php_error_docref(NULL, E_WARNING, "Unable to flush filter, not removing");
 		RETURN_FALSE;
 	}
@@ -1454,7 +1467,7 @@ PHP_FUNCTION(stream_set_blocking)
 
 /* }}} */
 
-/* {{{ Set timeout on stream read to seconds + microseonds */
+/* {{{ Set timeout on stream read to seconds + microseconds */
 #if defined(HAVE_SYS_TIME_H) || defined(PHP_WIN32)
 PHP_FUNCTION(stream_set_timeout)
 {

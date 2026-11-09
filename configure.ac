@@ -22,10 +22,10 @@ m4_include([Zend/Zend.m4])
 dnl Basic autoconf initialization, generation of config.nice.
 dnl ----------------------------------------------------------------------------
 
-AC_PREREQ([2.68])
-AC_INIT([PHP],[8.6.0-dev],[https://github.com/php/php-src/issues],[php],[https://www.php.net])
+AC_PREREQ([2.71])
+AC_INIT([PHP],[8.7.0-dev],[https://github.com/php/php-src/issues],[php],[https://www.php.net])
 AC_CONFIG_SRCDIR([main/php_version.h])
-AC_CONFIG_MACRO_DIR([build])
+AC_CONFIG_MACRO_DIRS([build])
 AC_CONFIG_AUX_DIR([build])
 AC_PRESERVE_HELP_ORDER
 
@@ -120,11 +120,14 @@ dnl ----------------------------------------------------------------------------
 
 PKG_PROG_PKG_CONFIG
 AC_PROG_CC([cc gcc])
+
+dnl Check if C compiler accepts C11.
+AS_CASE([$ac_prog_cc_stdc], [c99|c89|no],
+  [AC_MSG_ERROR([C compiler would not accept C11 code.])])
+
 PHP_DETECT_ICC
 PHP_DETECT_SUNCC
 
-dnl AC_PROG_CC_C99 is obsolete with autoconf >= 2.70 yet necessary for <= 2.69.
-m4_version_prereq([2.70],,[AC_PROG_CC_C99])
 AC_PROG_CPP
 AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_LN_S
@@ -134,17 +137,6 @@ AS_VAR_IF([cross_compiling], [yes],
     AC_MSG_CHECKING([for native build C compiler])
     AC_MSG_RESULT([$BUILD_CC])],
   [BUILD_CC=$CC])
-
-dnl The macro AC_PROG_CC_C99 sets the shell variable ac_cv_prog_cc_c99 to 'no'
-dnl if the compiler does not support C99.i.e. does not support any of _Bool,
-dnl flexible arrays, inline, long long int, mixed code and declarations,
-dnl named initialization of structs, restrict, varargs macros, variable
-dnl declarations in for loops and variable length arrays.
-dnl
-dnl https://www.gnu.org/software/autoconf/manual/autoconf-2.60/html_node/C-Compiler.html
-if test "$ac_cv_prog_cc_c99" = no; then
-  AC_MSG_ERROR([C compiler would not accept C99 code])
-fi
 
 dnl Support systems with system libraries in e.g. /usr/lib64.
 PHP_ARG_WITH([libdir],
@@ -284,6 +276,9 @@ SAPI_SHARED=libs/$SAPI_LIBNAME_SHARED
 SAPI_STATIC=libs/$SAPI_LIBNAME_STATIC
 SAPI_LIBTOOL=libphp.la
 
+dnl Set by SAPIs whose host program dlopen()s libphp without linking against it.
+php_tsrm_dlopened_sapi=no
+
 PHP_CONFIGURE_PART([Configuring SAPI modules])
 
 esyscmd(./build/config-stubs sapi)
@@ -369,6 +364,9 @@ AC_SEARCH_LIBS([Pgrab], [proc])
 dnl Haiku does not have network api in libc.
 AC_SEARCH_LIBS([setsockopt], [network])
 
+dnl Solaris/illumos provide sendfile() in libsendfile; libc on Linux/FreeBSD.
+AC_SEARCH_LIBS([sendfile], [sendfile])
+
 dnl Check for openpty. It may require linking against libutil or libbsd.
 AC_CHECK_FUNCS([openpty],,
   [AC_SEARCH_LIBS([openpty], [util bsd], [AC_DEFINE([HAVE_OPENPTY], [1])])])
@@ -377,7 +375,7 @@ dnl Then headers.
 dnl ----------------------------------------------------------------------------
 
 dnl QNX requires unix.h to allow functions in libunix to work properly.
-AC_CHECK_HEADERS(m4_normalize([
+AC_CHECK_HEADERS([
   dirent.h
   sys/param.h
   sys/types.h
@@ -425,7 +423,7 @@ AC_CHECK_HEADERS(m4_normalize([
   nmmintrin.h
   wmmintrin.h
   immintrin.h
-]),,, [dnl
+],,, [dnl
 #ifdef HAVE_SYS_PARAM_H
 #include <sys/param.h>
 #endif
@@ -449,8 +447,6 @@ PHP_BROKEN_GETCWD
 AS_VAR_IF([GCC], [yes], [PHP_BROKEN_GCC_STRLEN_OPT])
 
 dnl Detect the headers required to use makedev, major, and minor.
-dnl Autoconf <= 2.69 didn't check glibc 2.25 deprecated macros in sys/types.h.
-m4_version_prereq([2.70],,[ac_cv_header_sys_types_h_makedev=no])
 AC_HEADER_MAJOR
 
 dnl Checks for typedefs, structures, and compiler characteristics.
@@ -497,19 +493,6 @@ PHP_CHECK_AVX512_SUPPORTS
 dnl Check AVX512 VBMI
 PHP_CHECK_AVX512_VBMI_SUPPORTS
 
-dnl Check for __alignof__ support in the compiler
-AC_CACHE_CHECK([whether the compiler supports __alignof__],
-[php_cv_have_alignof],
-[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
-  int align = __alignof__(int);
-  (void)align;
-])],
-[php_cv_have_alignof=yes],
-[php_cv_have_alignof=no])])
-AS_VAR_IF([php_cv_have_alignof], [yes],
-  [AC_DEFINE([HAVE_ALIGNOF], [1],
-    [Define to 1 if the compiler supports '__alignof__'.])])
-
 dnl Check for structure members.
 AC_CHECK_MEMBERS([struct tm.tm_gmtoff],,,[#include <time.h>])
 AC_CHECK_MEMBERS(m4_normalize([
@@ -543,7 +526,7 @@ PHP_CHECK_VARIABLE_ATTRIBUTE([aligned])
 dnl Checks for library functions.
 dnl ----------------------------------------------------------------------------
 
-AC_CHECK_FUNCS(m4_normalize([
+AC_CHECK_FUNCS([
   alphasort
   asctime_r
   asprintf
@@ -588,10 +571,12 @@ AC_CHECK_FUNCS(m4_normalize([
   putenv
   reallocarray
   scandir
+  sendfile
   setenv
   setitimer
   shutdown
   sigprocmask
+  splice
   statfs
   statvfs
   std_syslog
@@ -604,7 +589,7 @@ AC_CHECK_FUNCS(m4_normalize([
   usleep
   utime
   vasprintf
-]))
+])
 
 PHP_ARG_ENABLE([system-glob],
   [whether to use the system glob function],
@@ -880,6 +865,20 @@ AS_VAR_IF([PHP_THREAD_SAFETY], [yes], [
 
   AC_MSG_CHECKING([for POSIX threads])
   AC_MSG_RESULT([yes])
+
+  AS_VAR_IF([php_tsrm_dlopened_sapi], [yes], [
+    php_tsrm_tls_model=
+    for flag in $CFLAGS $EXTRA_CFLAGS; do
+      AS_CASE([$flag], [-ftls-model=*], [php_tsrm_tls_model=$flag])
+    done
+
+    dnl Define TSRM_TLS_MODEL_USE_DEFAULT to avoid forcing static TLS in dlopened SAPIs.
+    dnl Omit it for explicit initial-exec to enable the TCB offset fast path.
+    AS_IF([test "$php_tsrm_tls_model" != "-ftls-model=initial-exec"], [
+      AC_DEFINE([TSRM_TLS_MODEL_USE_DEFAULT], [1],
+        [Define to 1 to use the compiler's default TLS model.])
+    ])
+  ])
 ])
 
 PHP_ARG_ENABLE([rtld-now],
@@ -1219,7 +1218,15 @@ AS_CASE([$host_cpu],
 
 AS_CASE([$host_os],
   [darwin*], [fiber_os="mac"],
-  [aix*|os400*], [fiber_os="aix"],
+  [aix*|os400*], [
+    fiber_os="aix"
+    dnl AIX triplets start w/ powerpc- even though it may be 64-bit (as AIX
+    dnl has a multiple bitness world). Check if the build is 64-bit, or we
+    dnl end up using the wrong fibre asm (w/o forcing a powerpc64 triplet)
+    AS_IF([test "$ac_cv_sizeof_long" -eq 8], [
+      fiber_cpu="ppc64"
+    ], [])
+  ],
   [freebsd*], [fiber_os="freebsd"],
   [midipix], [fiber_os="midipix"],
   [fiber_os="other"]
@@ -1638,7 +1645,12 @@ PHP_INSTALL_HEADERS([Zend/Optimizer], m4_normalize([
   zend_worklist.h
 ]))
 
-PHP_ADD_SOURCES([TSRM], [TSRM.c], [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
+PHP_ADD_SOURCES([TSRM], m4_normalize([
+    TSRM.c
+    TSRM_atexit_win.c
+    TSRM_atexit_darwin.c
+    TSRM_atexit_posix.c
+  ]), [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
 
 PHP_ADD_SOURCES([main], m4_normalize([
     explicit_bzero.c
@@ -1684,6 +1696,15 @@ PHP_ADD_SOURCES_X([main],
   [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1],
   [PHP_FASTCGI_OBJS],
   [no])
+
+PHP_ADD_SOURCES([main/io], m4_normalize([
+    php_io.c
+    php_io_copy_linux.c
+    php_io_copy_freebsd.c
+    php_io_copy_solaris.c
+    php_io_copy_macos.c
+  ]),
+  [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
 
 PHP_ADD_SOURCES([main/poll], m4_normalize([
     poll_backend_epoll.c
@@ -1745,10 +1766,10 @@ PHP_ADD_SOURCES([Zend], m4_normalize([
     zend_alloc.c
     zend_API.c
     zend_ast.c
-    zend_atomic.c
     zend_attributes.c
     zend_autoload.c
     zend_builtin_functions.c
+    zend_runtime_module.c
     zend_call_stack.c
     zend_closures.c
     zend_compile.c
@@ -1789,6 +1810,7 @@ PHP_ADD_SOURCES([Zend], m4_normalize([
     zend_observer.c
     zend_opcode.c
     zend_operators.c
+    zend_partial.c
     zend_property_hooks.c
     zend_ptr_stack.c
     zend_signal.c
@@ -1819,6 +1841,7 @@ AC_DEFINE([HAVE_BUILD_DEFS_H], [1],
 
 PHP_ADD_BUILD_DIR([
   main
+  main/io
   main/poll
   main/streams
   scripts

@@ -1085,6 +1085,9 @@ static void php_dom_transfer_document_ref_single_aux(xmlNodePtr node, php_libxml
 	if (node->type == XML_ELEMENT_NODE) {
 		for (xmlAttrPtr attr = node->properties; attr != NULL; attr = attr->next) {
 			php_dom_transfer_document_ref_single_node((xmlNodePtr) attr, new_document);
+			for (xmlNodePtr child = attr->children; child; child = child->next) {
+				php_dom_transfer_document_ref_single_node((xmlNodePtr) child, new_document);
+			}
 		}
 	}
 }
@@ -2312,7 +2315,7 @@ static void dom_document_register_node_class(INTERNAL_FUNCTION_PARAMETERS, bool 
 		return;
 	}
 
-	zend_argument_error(NULL, 2, "must be a class name derived from %s or null, %s given", ZSTR_VAL(basece->name), ZSTR_VAL(ce->name));
+	zend_argument_error(NULL, 2, "must be a class name derived from %pS or null, %pS given", basece->name, ce->name);
 	RETURN_THROWS();
 }
 

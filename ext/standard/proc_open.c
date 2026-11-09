@@ -42,10 +42,20 @@
  * to be really buggy.
  */
 #include <spawn.h>
+#ifdef __APPLE__
+#include <AvailabilityMacros.h>
+#endif
 #define USE_POSIX_SPAWN
 
-/* The non-_np variant is in macOS 26 (and _np deprecated) */
-#ifdef HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR
+/* The non-_np variant is in macOS 26 (and _np deprecated). On Apple, it has to be selected by the
+ * deployment target rather than the configure check: the link check passes whenever the SDK
+ * exports the symbol even if the running system is older, in which case the weakly linked
+ * reference resolves to NULL at runtime. */
+#if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED >= 260000
+#define POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR posix_spawn_file_actions_addchdir
+#elif defined(__APPLE__)
+#define POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR posix_spawn_file_actions_addchdir_np
+#elif defined(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR)
 #define POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR posix_spawn_file_actions_addchdir
 #else
 #define POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR posix_spawn_file_actions_addchdir_np
@@ -165,7 +175,7 @@ ZEND_ATTRIBUTE_NONNULL static php_process_env php_array_to_envp(const HashTable 
 #ifndef PHP_WIN32
 		env.envarray = (char **) ecalloc(1, sizeof(char *));
 #endif
-		env.envp = (char *) ecalloc(4, 1);
+		env.envp = (char *) ecalloc(4, sizeof(char));
 		return env;
 	}
 
@@ -194,7 +204,7 @@ ZEND_ATTRIBUTE_NONNULL static php_process_env php_array_to_envp(const HashTable 
 #ifndef PHP_WIN32
 	ep = env.envarray = (char **) ecalloc(cnt + 1, sizeof(char *));
 #endif
-	p = env.envp = (char *) ecalloc(sizeenv + 4, 1);
+	p = env.envp = (char *) ecalloc(sizeenv + 4, sizeof(char));
 
 	ZEND_HASH_FOREACH_STR_KEY_PTR(env_hash, key, str) {
 #ifndef PHP_WIN32
@@ -696,7 +706,7 @@ static void init_startup_info(STARTUPINFOW *si, descriptorspec_item *descriptors
 
 static void init_process_info(PROCESS_INFORMATION *pi)
 {
-	memset(&pi, 0, sizeof(pi));
+	memset(pi, 0, sizeof(*pi));
 }
 
 /* on success, returns length of *comspec, which then needs to be efree'd by caller */
@@ -747,7 +757,7 @@ out:
 
 static zend_result convert_command_to_use_shell(wchar_t **cmdw, size_t cmdw_len)
 {
-	wchar_t *comspec;
+	wchar_t *comspec = NULL;
 	size_t len = find_comspec_nt(&comspec);
 	if (len == 0) {
 		php_error_docref(NULL, E_WARNING, "Command conversion failed");
@@ -785,7 +795,7 @@ static zend_string* get_command_from_array(const HashTable *array, char ***argv,
 	zend_string *command = NULL;
 	uint32_t i = 0;
 
-	*argv = safe_emalloc(sizeof(char *), num_elems + 1, 0);
+	*argv = safe_emalloc(num_elems + 1, sizeof(char *), 0);
 
 	ZEND_HASH_FOREACH_VAL(array, arg_zv) {
 		zend_string *arg_str = get_valid_arg_string(arg_zv, i + 1);
@@ -831,8 +841,8 @@ static zend_result set_proc_descriptor_to_blackhole(descriptorspec_item *desc)
 {
 #ifdef PHP_WIN32
 	desc->childend = CreateFileA("nul", GENERIC_READ | GENERIC_WRITE,
-		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-	if (desc->childend == NULL) {
+		FILE_SHARE_READ | FILE_SHARE_WRITE, &php_proc_open_security, OPEN_EXISTING, 0, NULL);
+	if (desc->childend == INVALID_HANDLE_VALUE) {
 		php_error_docref(NULL, E_WARNING, "Failed to open nul");
 		return FAILURE;
 	}
@@ -928,7 +938,7 @@ static zend_result set_proc_descriptor_to_socket(descriptorspec_item *desc)
 
 	if (create_socketpair(sock)) {
 		zend_string *err = php_socket_error_str(php_socket_errno());
-		php_error_docref(NULL, E_WARNING, "Unable to create socket pair: %s", ZSTR_VAL(err));
+		php_error_docref(NULL, E_WARNING, "Unable to create socket pair: %pS", err);
 		zend_string_release(err);
 		return FAILURE;
 	}
@@ -1081,7 +1091,7 @@ static zend_result set_proc_descriptor_from_array(const HashTable *ht, descripto
 		/* Set descriptor to slave end of PTY */
 		retval = set_proc_descriptor_to_pty(&descriptors[ndesc], pty_master_fd, pty_slave_fd);
 	} else {
-		php_error_docref(NULL, E_WARNING, "%s is not a valid descriptor spec/mode", ZSTR_VAL(ztype));
+		php_error_docref(NULL, E_WARNING, "%pS is not a valid descriptor spec/mode", ztype);
 		goto finish;
 	}
 
@@ -1175,8 +1185,9 @@ static void close_all_descriptors(descriptorspec_item *descriptors, int ndesc)
 {
 	for (int i = 0; i < ndesc; i++) {
 		close_descriptor(descriptors[i].childend);
-		if (descriptors[i].parentend)
+		if (descriptors[i].type != DESCRIPTOR_TYPE_STD) {
 			close_descriptor(descriptors[i].parentend);
+		}
 	}
 }
 

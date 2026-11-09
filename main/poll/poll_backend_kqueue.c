@@ -167,7 +167,6 @@ static zend_result kqueue_backend_modify(php_poll_ctx *ctx, int fd, uint32_t eve
 
 	struct kevent deletes[2];
 	struct kevent adds[2];
-	int delete_count = 0;
 	int add_count = 0;
 	int successful_deletes = 0;
 
@@ -179,15 +178,9 @@ static zend_result kqueue_backend_modify(php_poll_ctx *ctx, int fd, uint32_t eve
 		add_flags |= EV_CLEAR;
 	}
 
-	/* Delete existing filters that are not in the new events */
-	if (!(events & PHP_POLL_READ)) {
-		EV_SET(&deletes[delete_count], fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-		delete_count++;
-	}
-	if (!(events & PHP_POLL_WRITE)) {
-		EV_SET(&deletes[delete_count], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-		delete_count++;
-	}
+	/* Delete all existing filters so the counters below know which ones were registered */
+	EV_SET(&deletes[0], fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+	EV_SET(&deletes[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
 
 	/* Prepare add operations for requested events */
 	if (events & PHP_POLL_READ) {
@@ -200,7 +193,7 @@ static zend_result kqueue_backend_modify(php_poll_ctx *ctx, int fd, uint32_t eve
 	}
 
 	/* Delete existing filters individually to count successes */
-	for (int i = 0; i < delete_count; i++) {
+	for (int i = 0; i < 2; i++) {
 		int result = kevent(backend_data->kqueue_fd, &deletes[i], 1, NULL, 0, NULL);
 		if (result == 0) {
 			successful_deletes++;
@@ -279,6 +272,11 @@ static zend_result kqueue_backend_remove(php_poll_ctx *ctx, int fd)
 		return FAILURE;
 	}
 
+	/* Remove from tracking */
+	if (!ctx->raw_events) {
+		zend_hash_index_del(backend_data->fd_tracking, fd);
+	}
+
 	/* If no filters were successfully deleted, that's an error */
 	if (successful_deletes == 0) {
 		php_poll_set_error(ctx, PHP_POLL_ERR_NOTFOUND);
@@ -289,11 +287,6 @@ static zend_result kqueue_backend_remove(php_poll_ctx *ctx, int fd)
 	backend_data->fd_count--;
 	backend_data->filter_count -= successful_deletes;
 
-	/* Remove from tracking */
-	if (!ctx->raw_events) {
-		zend_hash_index_del(backend_data->fd_tracking, fd);
-	}
-
 	return SUCCESS;
 }
 
@@ -303,149 +296,190 @@ static int kqueue_backend_wait(
 {
 	kqueue_backend_data_t *backend_data = (kqueue_backend_data_t *) ctx->backend_data;
 
-	/* For raw events, we need capacity for max_events.
-	 * For grouped events, kqueue can return up to 2 events per FD, so we need 2x capacity. */
-	int required_capacity = ctx->raw_events ? max_events : (max_events * 2);
-	if (required_capacity > backend_data->events_capacity) {
+	/* Cap every kevent() request at the entries we can still deliver, like epoll's maxevents.
+	 * Unretrieved events stay pending in the kqueue (EV_ONESHOT deletes and EV_CLEAR resets only
+	 * at retrieval), so nothing is lost and the caller's buffer cannot overflow. */
+	if (max_events > backend_data->events_capacity) {
 		struct kevent *new_events = php_poll_realloc(
-				backend_data->events, required_capacity * sizeof(struct kevent), ctx->persistent);
+				backend_data->events, max_events * sizeof(struct kevent), ctx->persistent);
 		if (!new_events) {
 			php_poll_set_error(ctx, PHP_POLL_ERR_NOMEM);
 			return -1;
 		}
 		backend_data->events = new_events;
-		backend_data->events_capacity = required_capacity;
+		backend_data->events_capacity = max_events;
 	}
 
-	int nfds = kevent(
-			backend_data->kqueue_fd, NULL, 0, backend_data->events, required_capacity, timeout);
+	if (ctx->raw_events) {
+		/* Raw events mode - direct 1:1 mapping, no grouping */
+		int nfds = kevent(
+				backend_data->kqueue_fd, NULL, 0, backend_data->events, max_events, timeout);
 
-	if (nfds < 0) {
-		php_poll_set_current_errno_error(ctx);
-		return -1;
-	}
-
-	if (nfds > 0) {
-		if (ctx->raw_events) {
-			/* Raw events mode - direct 1:1 mapping, no grouping */
-			for (int i = 0; i < nfds && i < max_events; i++) {
-				events[i].fd = (int) backend_data->events[i].ident;
-				events[i].events = 0;
-				events[i].revents = 0;
-				events[i].data = backend_data->events[i].udata;
-
-				/* Convert kqueue filter to poll event */
-				if (backend_data->events[i].filter == EVFILT_READ) {
-					events[i].revents |= PHP_POLL_READ;
-				} else if (backend_data->events[i].filter == EVFILT_WRITE) {
-					events[i].revents |= PHP_POLL_WRITE;
-				}
-
-				/* Convert kqueue flags to poll events */
-				if (backend_data->events[i].flags & EV_EOF) {
-					events[i].revents |= PHP_POLL_HUP;
-				}
-				if (backend_data->events[i].flags & EV_ERROR) {
-					events[i].revents |= PHP_POLL_ERROR;
-				}
-			}
-			return nfds > max_events ? max_events : nfds;
-		} else {
-			/* Grouped events mode with improved oneshot tracking */
-			int unique_events = 0, garbage_events = 0, fd;
-
-			for (int i = 0; i < nfds; i++) {
-				fd = (int) backend_data->events[i].ident;
-				uint32_t revents = 0;
-				void *data = backend_data->events[i].udata;
-				bool is_oneshot = (backend_data->events[i].flags & EV_ONESHOT) != 0;
-
-				/* Convert this event */
-				if (backend_data->events[i].filter == EVFILT_READ) {
-					revents |= PHP_POLL_READ;
-				} else if (backend_data->events[i].filter == EVFILT_WRITE) {
-					revents |= PHP_POLL_WRITE;
-				}
-
-				if (backend_data->events[i].flags & EV_EOF) {
-					revents |= PHP_POLL_HUP;
-				}
-				if (backend_data->events[i].flags & EV_ERROR) {
-					revents |= PHP_POLL_ERROR;
-				}
-
-				/* Look for existing event for this FD */
-				bool found = false;
-				for (int j = 0; j < unique_events; j++) {
-					if (events[j].fd == fd) {
-						/* Combine with existing event */
-						events[j].revents |= revents;
-						found = true;
-						break;
-					}
-				}
-
-				if (!found) {
-					/* New FD, create new event */
-					ZEND_ASSERT(unique_events < max_events);
-					events[unique_events].fd = fd;
-					events[unique_events].events = 0;
-					events[unique_events].revents = revents;
-					events[unique_events].data = data;
-					unique_events++;
-
-					/* Handle oneshot tracking */
-					if (is_oneshot) {
-						zval *tracking = zend_hash_index_find(backend_data->fd_tracking, fd);
-						if (tracking && (Z_LVAL_P(tracking) & KQUEUE_FD_ONESHOT_COMPLETE)) {
-							/* Mark which filter fired for garbage collection */
-							zend_long flags = Z_LVAL_P(tracking);
-							flags &= ~KQUEUE_FD_ONESHOT_COMPLETE; /* Clear complete flag */
-							if (revents & PHP_POLL_READ) {
-								flags |= KQUEUE_FD_GARBAGE_READ; /* Need to clean write */
-							}
-							if (revents & PHP_POLL_WRITE) {
-								flags |= KQUEUE_FD_GARBAGE_WRITE; /* Need to clean read */
-							}
-							ZVAL_LONG(tracking, flags);
-							backend_data->fd_count--;
-							garbage_events++;
-						}
-					}
-				} else if (is_oneshot) {
-					/* Second filter for same FD fired - clear garbage flags */
-					zval *tracking = zend_hash_index_find(backend_data->fd_tracking, fd);
-					if (tracking) {
-						/* Remove FD from tracking as it gets deleted from kqueue as well */
-						zend_hash_index_del(backend_data->fd_tracking, fd);
-						garbage_events--;
-					}
-				}
-			}
-
-			if (garbage_events > 0) {
-				/* Clean up orphaned filters from complete oneshot FDs */
-				struct kevent cleanup_change;
-				ZEND_HASH_FOREACH_NUM_KEY_VAL(backend_data->fd_tracking, zend_ulong fd_key, zval *tracking)
-				{
-					zend_long flags = Z_LVAL_P(tracking);
-					if (flags & KQUEUE_FD_HAS_GARBAGE) {
-						int filter = (flags & KQUEUE_FD_GARBAGE_READ) ? EVFILT_WRITE : EVFILT_READ;
-						EV_SET(&cleanup_change, fd_key, filter, EV_DELETE, 0, 0, NULL);
-						kevent(backend_data->kqueue_fd, &cleanup_change, 1, NULL, 0, NULL);
-						
-						/* Remove FD from tracking after cleanup */
-						zend_hash_index_del(backend_data->fd_tracking, fd_key);
-					}
-				}
-				ZEND_HASH_FOREACH_END();
-			}
-
-			return unique_events;
+		if (nfds < 0) {
+			php_poll_set_current_errno_error(ctx);
+			return -1;
 		}
+
+		for (int i = 0; i < nfds; i++) {
+			events[i].fd = (int) backend_data->events[i].ident;
+			events[i].events = 0;
+			events[i].revents = 0;
+			events[i].data = backend_data->events[i].udata;
+
+			/* Convert kqueue filter to poll event */
+			if (backend_data->events[i].filter == EVFILT_READ) {
+				events[i].revents |= PHP_POLL_READ;
+			} else if (backend_data->events[i].filter == EVFILT_WRITE) {
+				events[i].revents |= PHP_POLL_WRITE;
+			}
+
+			/* Convert kqueue flags to poll events */
+			if (backend_data->events[i].flags & EV_EOF) {
+				events[i].revents |= PHP_POLL_HUP;
+			}
+			if (backend_data->events[i].flags & EV_ERROR) {
+				events[i].revents |= PHP_POLL_ERROR;
+			}
+
+			/* Oneshot filters are deleted by the kernel once retrieved */
+			if (backend_data->events[i].flags & EV_ONESHOT) {
+				backend_data->filter_count--;
+			}
+		}
+
+		return nfds;
 	}
 
-	return nfds;
+	/* Grouped events mode with improved oneshot tracking.
+	 *
+	 * kqueue reports one event per (FD, filter) pair, so a READ+WRITE pair merges into a single
+	 * entry and one round can fill fewer than max_events entries while more events are pending.
+	 * Top up with zero-timeout rounds, each requesting only the remaining free entries. Both
+	 * FreeBSD and XNU re-enqueue delivered level-triggered events at the tail of the active queue,
+	 * so top-up rounds see not-yet-delivered events first, matching epoll's round-robin fill. */
+	int unique_events = 0, garbage_events = 0;
+	const struct timespec zero_timeout = {0, 0};
+	const struct timespec *round_timeout = timeout;
+
+	while (true) {
+		int slots = max_events - unique_events;
+		int nfds = kevent(
+				backend_data->kqueue_fd, NULL, 0, backend_data->events, slots, round_timeout);
+
+		if (nfds < 0) {
+			if (unique_events > 0) {
+				/* Deliver what was already gathered */
+				break;
+			}
+			php_poll_set_current_errno_error(ctx);
+			return -1;
+		}
+
+		int new_unique_events = 0;
+
+		for (int i = 0; i < nfds; i++) {
+			int fd = (int) backend_data->events[i].ident;
+			uint32_t revents = 0;
+			void *data = backend_data->events[i].udata;
+			bool is_oneshot = (backend_data->events[i].flags & EV_ONESHOT) != 0;
+
+			if (is_oneshot) {
+				backend_data->filter_count--;
+			}
+
+			/* Convert this event */
+			if (backend_data->events[i].filter == EVFILT_READ) {
+				revents |= PHP_POLL_READ;
+			} else if (backend_data->events[i].filter == EVFILT_WRITE) {
+				revents |= PHP_POLL_WRITE;
+			}
+
+			if (backend_data->events[i].flags & EV_EOF) {
+				revents |= PHP_POLL_HUP;
+			}
+			if (backend_data->events[i].flags & EV_ERROR) {
+				revents |= PHP_POLL_ERROR;
+			}
+
+			/* Look for existing event for this FD */
+			bool found = false;
+			for (int j = 0; j < unique_events; j++) {
+				if (events[j].fd == fd) {
+					/* Combine with existing event */
+					events[j].revents |= revents;
+					found = true;
+					break;
+				}
+			}
+
+			if (!found) {
+				/* New FD, create new event */
+				ZEND_ASSERT(unique_events < max_events);
+				events[unique_events].fd = fd;
+				events[unique_events].events = 0;
+				events[unique_events].revents = revents;
+				events[unique_events].data = data;
+				unique_events++;
+				new_unique_events++;
+
+				/* Handle oneshot tracking */
+				if (is_oneshot) {
+					zval *tracking = zend_hash_index_find(backend_data->fd_tracking, fd);
+					if (tracking && (Z_LVAL_P(tracking) & KQUEUE_FD_ONESHOT_COMPLETE)) {
+						/* Mark which filter fired for garbage collection */
+						zend_long flags = Z_LVAL_P(tracking);
+						flags &= ~KQUEUE_FD_ONESHOT_COMPLETE; /* Clear complete flag */
+						if (revents & PHP_POLL_READ) {
+							flags |= KQUEUE_FD_GARBAGE_READ; /* Need to clean write */
+						}
+						if (revents & PHP_POLL_WRITE) {
+							flags |= KQUEUE_FD_GARBAGE_WRITE; /* Need to clean read */
+						}
+						ZVAL_LONG(tracking, flags);
+						backend_data->fd_count--;
+						garbage_events++;
+					}
+				}
+			} else if (is_oneshot) {
+				/* Second filter for same FD fired - clear garbage flags */
+				zval *tracking = zend_hash_index_find(backend_data->fd_tracking, fd);
+				if (tracking) {
+					/* Remove FD from tracking as it gets deleted from kqueue as well */
+					zend_hash_index_del(backend_data->fd_tracking, fd);
+					garbage_events--;
+				}
+			}
+		}
+
+		/* Stop on a partial round (drained or timed out), a full buffer, or a full round with no
+		 * new FDs (kernel re-reported level-triggered events already merged above - don't spin) */
+		if (nfds < slots || unique_events == max_events || new_unique_events == 0) {
+			break;
+		}
+		round_timeout = &zero_timeout;
+	}
+
+	if (garbage_events > 0) {
+		/* Clean up orphaned filters from complete oneshot FDs */
+		struct kevent cleanup_change;
+		ZEND_HASH_FOREACH_NUM_KEY_VAL(backend_data->fd_tracking, zend_ulong fd_key, zval *tracking)
+		{
+			zend_long flags = Z_LVAL_P(tracking);
+			if (flags & KQUEUE_FD_HAS_GARBAGE) {
+				int filter = (flags & KQUEUE_FD_GARBAGE_READ) ? EVFILT_WRITE : EVFILT_READ;
+				EV_SET(&cleanup_change, fd_key, filter, EV_DELETE, 0, 0, NULL);
+				if (kevent(backend_data->kqueue_fd, &cleanup_change, 1, NULL, 0, NULL) == 0) {
+					backend_data->filter_count--;
+				}
+
+				/* Remove FD from tracking after cleanup */
+				zend_hash_index_del(backend_data->fd_tracking, fd_key);
+			}
+		}
+		ZEND_HASH_FOREACH_END();
+	}
+
+	return unique_events;
 }
 
 static bool kqueue_backend_is_available(void)
@@ -466,15 +500,11 @@ static int kqueue_backend_get_suitable_max_events(php_poll_ctx *ctx)
 		return -1;
 	}
 
-	if (ctx->raw_events) {
-		/* For raw events, return the total number of filters */
-		int active_filters = backend_data->filter_count;
-		return active_filters == 0 ? 1 : active_filters;
-	} else {
-		/* For grouped events, return the number of unique FDs */
-		int active_fds = backend_data->fd_count;
-		return active_fds == 0 ? 1 : active_fds;
-	}
+	/* kqueue reports one event per filter even in grouped mode (events are merged into
+	 * per-FD entries afterwards) and the wait request is capped at max_events, so size
+	 * for the total filter count to allow retrieving all pending events in one call. */
+	int active_filters = backend_data->filter_count;
+	return active_filters == 0 ? 1 : active_filters;
 }
 
 const php_poll_backend_ops php_poll_backend_kqueue_ops = {

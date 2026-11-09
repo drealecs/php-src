@@ -567,7 +567,7 @@ static int php_sock_array_to_fd_set(uint32_t arg_num, zval *sock_array, fd_set *
 		num++;
 	} ZEND_HASH_FOREACH_END();
 
-	return num ? 1 : 0;
+	return num;
 }
 /* }}} */
 
@@ -618,7 +618,7 @@ PHP_FUNCTION(socket_select)
 	struct timeval *tv_p = NULL;
 	fd_set			rfds, wfds, efds;
 	PHP_SOCKET		max_fd = 0;
-	int				retval, sets = 0;
+	int				retval, max_set_count = 0;
 	zend_long		sec, usec = 0;
 	bool		sec_is_null = 0;
 
@@ -636,30 +636,39 @@ PHP_FUNCTION(socket_select)
 	FD_ZERO(&efds);
 
 	if (r_array != NULL) {
-		sets += retval = php_sock_array_to_fd_set(1, r_array, &rfds, &max_fd);
+		retval = php_sock_array_to_fd_set(1, r_array, &rfds, &max_fd);
 		if (retval == -1) {
 			RETURN_THROWS();
+		}
+		if (retval > max_set_count) {
+			max_set_count = retval;
 		}
 	}
 	if (w_array != NULL) {
-		sets += retval = php_sock_array_to_fd_set(2, w_array, &wfds, &max_fd);
+		retval = php_sock_array_to_fd_set(2, w_array, &wfds, &max_fd);
 		if (retval == -1) {
 			RETURN_THROWS();
+		}
+		if (retval > max_set_count) {
+			max_set_count = retval;
 		}
 	}
 	if (e_array != NULL) {
-		sets += retval = php_sock_array_to_fd_set(3, e_array, &efds, &max_fd);
+		retval = php_sock_array_to_fd_set(3, e_array, &efds, &max_fd);
 		if (retval == -1) {
 			RETURN_THROWS();
 		}
+		if (retval > max_set_count) {
+			max_set_count = retval;
+		}
 	}
 
-	if (!sets) {
+	if (!max_set_count) {
 		zend_value_error("socket_select(): At least one array argument must be passed");
 		RETURN_THROWS();
 	}
 
-	if (!PHP_SAFE_MAX_FD(max_fd, 0)) {
+	if (!PHP_SAFE_MAX_FD(max_fd, max_set_count)) {
 		RETURN_FALSE;
 	}
 
@@ -2032,6 +2041,7 @@ PHP_FUNCTION(socket_get_option)
 #endif
 
 	optlen = sizeof(other_val);
+	other_val = 0;
 
 	if (getsockopt(php_sock->bsd_socket, level, optname, (char*)&other_val, &optlen) != 0) {
 		PHP_SOCKET_ERROR(php_sock, "Unable to retrieve socket option", errno);
@@ -2058,9 +2068,13 @@ PHP_FUNCTION(socket_set_option)
 #else
 	struct					timeval tv;
 #endif
+#ifdef SO_ATTACH_REUSEPORT_CBPF
+	struct sock_filter cbpf[8] = {0};
+	struct sock_fprog bpfprog;
+#endif
 	zend_long					level, optname;
 	void 					*opt_ptr;
-	HashTable		 		*opt_ht;
+	HashTable		 		*opt_ht, *opt_props = NULL;
 
 	ZEND_PARSE_PARAMETERS_START(4, 4)
 		Z_PARAM_OBJECT_OF_CLASS(arg1, socket_ce)
@@ -2154,7 +2168,7 @@ PHP_FUNCTION(socket_set_option)
 
 			// TCP_USER_TIMEOUT unsigned int
 			if (timeout < 0 || timeout > UINT_MAX) {
-				zend_argument_value_error(4, "must be of between 0 and %u", UINT_MAX);
+				zend_argument_value_error(4, "must be between 0 and %u", UINT_MAX);
 				RETURN_THROWS();
 			}
 
@@ -2187,23 +2201,27 @@ PHP_FUNCTION(socket_set_option)
 					zend_argument_type_error(4, "must be of type array when argument #3 ($option) is SO_LINGER, %s given", zend_zval_value_name(arg4));
 					RETURN_THROWS();
 				} else {
-					opt_ht = Z_OBJPROP_P(arg4);
+					opt_props = zend_get_properties_for(arg4, ZEND_PROP_PURPOSE_ARRAY_CAST);
+					opt_ht = opt_props ? opt_props : (HashTable *) &zend_empty_array;
 				}
 			} else {
 				opt_ht = Z_ARRVAL_P(arg4);
 			}
 
-			if ((l_onoff = zend_hash_str_find(opt_ht, l_onoff_key, sizeof(l_onoff_key) - 1)) == NULL) {
+			if ((l_onoff = zend_hash_str_find_ind(opt_ht, l_onoff_key, sizeof(l_onoff_key) - 1)) == NULL) {
+				zend_release_properties(opt_props);
 				zend_argument_value_error(4, "must have key \"%s\"", l_onoff_key);
 				RETURN_THROWS();
 			}
-			if ((l_linger = zend_hash_str_find(opt_ht, l_linger_key, sizeof(l_linger_key) - 1)) == NULL) {
+			if ((l_linger = zend_hash_str_find_ind(opt_ht, l_linger_key, sizeof(l_linger_key) - 1)) == NULL) {
+				zend_release_properties(opt_props);
 				zend_argument_value_error(4, "must have key \"%s\"", l_linger_key);
 				RETURN_THROWS();
 			}
 
 			zend_long val_lonoff = zval_get_long(l_onoff);
 			zend_long val_linger = zval_get_long(l_linger);
+			zend_release_properties(opt_props);
 
 			if (val_lonoff < 0 || val_lonoff > USHRT_MAX) {
 				zend_argument_value_error(4, "\"%s\" must be between 0 and %u", l_onoff_key, USHRT_MAX);
@@ -2211,7 +2229,7 @@ PHP_FUNCTION(socket_set_option)
 			}
 
 			if (val_linger < 0 || val_linger > USHRT_MAX) {
-				zend_argument_value_error(4, "\"%s\" must be between 0 and %d", l_linger, USHRT_MAX);
+				zend_argument_value_error(4, "\"%s\" must be between 0 and %u", l_linger_key, USHRT_MAX);
 				RETURN_THROWS();
 			}
 
@@ -2236,23 +2254,27 @@ PHP_FUNCTION(socket_set_option)
 							zend_zval_value_name(arg4));
 					RETURN_THROWS();
 				} else {
-					opt_ht = Z_OBJPROP_P(arg4);
+					opt_props = zend_get_properties_for(arg4, ZEND_PROP_PURPOSE_ARRAY_CAST);
+					opt_ht = opt_props ? opt_props : (HashTable *) &zend_empty_array;
 				}
 			} else {
 				opt_ht = Z_ARRVAL_P(arg4);
 			}
 
-			if ((sec = zend_hash_str_find(opt_ht, sec_key, sizeof(sec_key) - 1)) == NULL) {
+			if ((sec = zend_hash_str_find_ind(opt_ht, sec_key, sizeof(sec_key) - 1)) == NULL) {
+				zend_release_properties(opt_props);
 				zend_argument_value_error(4, "must have key \"%s\"", sec_key);
 				RETURN_THROWS();
 			}
-			if ((usec = zend_hash_str_find(opt_ht, usec_key, sizeof(usec_key) - 1)) == NULL) {
+			if ((usec = zend_hash_str_find_ind(opt_ht, usec_key, sizeof(usec_key) - 1)) == NULL) {
+				zend_release_properties(opt_props);
 				zend_argument_value_error(4, "must have key \"%s\"", usec_key);
 				RETURN_THROWS();
 			}
 
 			zend_long valsec = zval_get_long(sec);
 			zend_long valusec = zval_get_long(usec);
+			zend_release_properties(opt_props);
 #ifndef PHP_WIN32
 			tv.tv_sec = valsec;
 			tv.tv_usec = valusec;
@@ -2336,17 +2358,28 @@ PHP_FUNCTION(socket_set_option)
 
 #ifdef SO_ATTACH_REUSEPORT_CBPF
 		case SO_ATTACH_REUSEPORT_CBPF: {
+			if (level != SOL_SOCKET) {
+				php_error_docref(NULL, E_WARNING, "Invalid level");
+				RETURN_FALSE;
+			}
+			if (Z_TYPE_P(arg4) != IS_LONG) {
+				zend_argument_type_error(4, "must be of type int when argument #3 ($option) is SO_ATTACH_REUSEPORT_CBPF, %s given", zend_zval_value_name(arg4));
+				RETURN_THROWS();
+			}
 			zend_long cbpf_val = zval_get_long(arg4);
 
 			if (!cbpf_val) {
+#ifdef SO_DETACH_REUSEPORT_BPF
 				ov = 1;
 				optlen = sizeof(ov);
 				opt_ptr = &ov;
-				optname = SO_DETACH_BPF;
+				optname = SO_DETACH_REUSEPORT_BPF;
+#else
+				php_error_docref(NULL, E_WARNING, "Detaching a reuseport CBPF filter is unsupported");
+				RETURN_FALSE;
+#endif
 			} else {
 				uint32_t k = (uint32_t)cbpf_val;
-				static struct sock_filter cbpf[8] = {0};
-				static struct sock_fprog bpfprog;
 
 				switch (k) {
 					case SKF_AD_CPU:
@@ -2375,8 +2408,8 @@ PHP_FUNCTION(socket_set_option)
 
 			// UDP segmentation offload maximum size or 0 to disable it
 			if (ov < 0 || ov > USHRT_MAX) {
-				zend_argument_value_error(4, "must be of between 0 and %u", USHRT_MAX);
-				RETURN_FALSE;
+				zend_argument_value_error(4, "must be between 0 and %u", USHRT_MAX);
+				RETURN_THROWS();
 			}
 
 			optlen = sizeof(ov);
@@ -2645,6 +2678,7 @@ PHP_FUNCTION(socket_import_stream)
 	retsock = Z_SOCKET_P(return_value);
 
 	if (!socket_import_file_descriptor(socket, retsock)) {
+		retsock->bsd_socket = -1;
 		zval_ptr_dtor(return_value);
 		RETURN_FALSE;
 	}

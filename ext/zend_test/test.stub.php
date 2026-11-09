@@ -35,6 +35,32 @@ namespace {
         public const DUMMY = 0;
     }
 
+    trait _ZendTestTraitForInternalClass
+    {
+        /** @var int */
+        public const ZEND_TRAIT_CONST = 123;
+
+        public int $traitProp = 456;
+
+        public function traitMethod(): int {}
+    }
+
+    trait _ZendTestTraitForInternalClass2
+    {
+        /** @var int */
+        public const ZEND_TRAIT_CONST2 = 321;
+
+        public static int $staticTraitProp = 999;
+
+        public function traitMethod2(): int {}
+    }
+
+    class _ZendTestClassWithTraits
+    {
+        use _ZendTestTraitForInternalClass;
+        use _ZendTestTraitForInternalClass2;
+    }
+
     /** @alias _ZendTestClassAlias */
     class _ZendTestClass implements _ZendTestInterface {
         public const mixed TYPED_CLASS_CONST1 = [];
@@ -239,6 +265,8 @@ namespace {
 
     function zend_test_void_return(): void {}
 
+    function &zend_test_forward_reference(mixed &$value): mixed {}
+
     function zend_test_compile_string(string $source_string, string $filename, int $position): void {}
 
     /** @deprecated */
@@ -273,15 +301,90 @@ namespace {
 
     function zend_delref(mixed $variable): void {}
 
+    function zend_test_erealloc_block_size(int $old_size, int $new_size): array {}
+
+    function zend_test_serialization_bailout(bool $unserialize, bool $locked): never {}
+
+    function zend_test_serialization_state(): array {}
+
+	function zend_bool(bool $param): bool {}
+	function zend_bool_or_null(bool|null $param): bool|null {}
+	function zend_bool_slow_zpp(bool $param): bool {}
+	function zend_bool_or_null_slow_zpp(bool|null $param): bool|null {}
+
+	function zend_int(int $param): int {}
+	function zend_int_or_null(int|null $param): int|null {}
+	function zend_int_slow_zpp(int $param): int {}
+	function zend_int_or_null_slow_zpp(int|null $param): int|null {}
+
+	function zend_float(float $param): float {}
+	function zend_float_or_null(float|null $param): float|null {}
+	function zend_float_slow_zpp(float $param): float {}
+	function zend_float_or_null_slow_zpp(float|null $param): float|null {}
+
+	function zend_number(int|float $param): int|float {}
+	function zend_number_or_null(int|float|null $param): int|float|null {}
+	function zend_number_slow_zpp(int|float $param): int|float {}
+	function zend_number_or_null_slow_zpp(int|float|null $param): int|float|null {}
+
+	function zend_object(object $param): object {}
+	function zend_object_or_null(object|null $param): object|null {}
+	function zend_object_slow_zpp(object $param): object {}
+	function zend_object_or_null_slow_zpp(object|null $param): object|null {}
+
+	function zend_obj(object $param): object {}
+	function zend_obj_or_null(object|null $param): object|null {}
+
+	function zend_obj_or_class_name(object|string $param): string {}
+	function zend_obj_or_class_name_or_null(object|string|null $param): string|null {}
+
+	function zend_class_name(string $param): string {}
+	function zend_class_name_or_null(string|null $param): string|null {}
+	function zend_class_name_slow_zpp(string $param): string {}
+	function zend_class_name_or_null_slow_zpp(string|null $param): string|null {}
+
+	function zend_object_sdtClass(stdClass $param): stdClass {}
+	function zend_object_sdtClass_or_null(stdClass|null $param): stdClass|null {}
+	function zend_object_sdtClass_slow_zpp(stdClass $param): stdClass {}
+	function zend_object_sdtClass_or_null_slow_zpp(stdClass|null $param): stdClass|null {}
+
+	function zend_obj_sdtClass(stdClass $param): stdClass {}
+	function zend_obj_sdtClass_or_null(stdClass|null $param): stdClass|null {}
+
+    /**
+     * @param resource $param
+     * @return resource
+     */
+	function zend_resource($param) {}
+    /**
+     * @param resource|null $param
+     * @return resource|null
+     */
+	function zend_resource_or_null($param) {}
+    /**
+     * @param resource $param
+     * @return resource
+     */
+	function zend_resource_slow_zpp($param) {}
+    /**
+     * @param resource|null $param
+     * @return resource|null
+     */
+	function zend_resource_or_null_slow_zpp($param) {}
+	
+    function zend_test_emalloc(int $size): void {}
+
+    function zend_test_callback(callable $callback): void {}
+
     function zend_string_or_object(object|string $param): object|string {}
 
     function zend_string_or_object_or_null(object|string|null $param): object|string|null {}
 
-    /** @param stdClass|string $param */
-    function zend_string_or_stdclass($param): stdClass|string {}
+    function zend_obj_stdclass_or_string(stdClass|string|null $param): stdClass|string {}
+    function zend_obj_stdclass_or_string_or_null(stdClass|string|null $param): stdClass|string|null {}
 
-    /** @param stdClass|string|null $param */
-    function zend_string_or_stdclass_or_null($param): stdClass|string|null {}
+    function zend_obj_stdclass_or_int(stdClass|int|null $param): stdClass|int {}
+    function zend_obj_stdclass_or_int_or_null(stdClass|int|null $param): stdClass|int|null {}
 
     function zend_number_or_string(string|int|float $param): string|int|float {}
 
@@ -308,6 +411,7 @@ namespace {
     function zend_call_method(object|string $obj_or_class, string $method, mixed $arg1 = UNKNOWN, mixed $arg2 = UNKNOWN): mixed {}
 
     function zend_object_init_with_constructor(string $class, mixed ...$args): mixed {}
+    function zend_object_init_with_constructor_array(string $class, array $args): mixed {}
 
     function zend_call_method_if_exists(object $obj, string $method, mixed ...$args): mixed {}
 
@@ -331,6 +435,8 @@ namespace {
     function zend_get_map_ptr_last(): int {}
 
     function zend_test_crash(?string $message = null): void {}
+
+    function zend_test_raise_and_throw(int $signal): void {}
 
     function zend_test_fill_packed_array(array &$array): void {}
 
@@ -366,6 +472,13 @@ function zend_test_override_libxml_global_state(): void {}
 
     /** @compile-time-eval */
     function zend_test_gh19792(): void {}
+
+    /* @param resource $stream */
+    function zend_test_handle_post_data(mixed $stream, string $content_type, int $content_length): void {}
+
+    function zend_new_singleton_array(): array {}
+
+    function zend_test_set_local_var(string $name, mixed $value): bool {}
 }
 
 namespace ZendTestNS {

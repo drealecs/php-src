@@ -17,6 +17,13 @@
 #ifndef HAVE_JIT_H
 #define HAVE_JIT_H
 
+#if defined(__APPLE__) && defined(__aarch64__) && defined(ZTS)
+# ifndef HAVE_PTHREAD_JIT_WRITE_PROTECT_NP
+#  error "Apple Silicon ZTS JIT requires pthread_jit_write_protect_np()"
+# endif
+# define ZEND_JIT_USE_APPLE_MAP_JIT 1
+#endif
+
 #if defined(__x86_64__) || defined(i386) || defined(ZEND_WIN32)
 # define ZEND_JIT_TARGET_X86   1
 # define ZEND_JIT_TARGET_ARM64 0
@@ -167,6 +174,7 @@ void zend_jit_deactivate(void);
 ZEND_EXT_API void zend_jit_status(zval *ret);
 ZEND_EXT_API void zend_jit_blacklist_function(zend_op_array *op_array);
 void zend_jit_restart(void);
+void zend_jit_save_restart_point(void);
 
 #define ZREG_LOAD           (1<<0)
 #define ZREG_STORE          (1<<1)

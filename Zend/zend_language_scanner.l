@@ -46,6 +46,7 @@
 #include "zend_strtod.h"
 #include "zend_exceptions.h"
 #include "zend_virtual_cwd.h"
+#include "zend_runtime_module.h"
 
 #define YYCTYPE   unsigned char
 #define YYFILL(n) { if ((YYCURSOR + n) >= (YYLIMIT + ZEND_MMAP_AHEAD)) { return 0; } }
@@ -84,7 +85,11 @@
 #define SCNG	LANG_SCNG
 #ifdef ZTS
 ZEND_API ts_rsrc_id language_scanner_globals_id;
-ZEND_API size_t language_scanner_globals_offset;
+# ifdef ZEND_WIN32
+TSRM_TLS zend_php_scanner_globals language_scanner_globals;
+# else
+ZEND_API TSRM_TLS TSRM_TLS_MODEL_ATTR zend_php_scanner_globals language_scanner_globals;
+# endif
 #else
 ZEND_API zend_php_scanner_globals language_scanner_globals;
 #endif
@@ -328,14 +333,13 @@ ZEND_API zend_result zend_lex_tstring(zval *zv, unsigned char *ident)
 static const zend_encoding *zend_multibyte_detect_utf_encoding(const unsigned char *script, size_t script_size)
 {
 	const unsigned char *p;
+	size_t offset = 0;
 	int wchar_size = 2;
 	int le = 0;
 
 	/* utf-16 or utf-32? */
-	p = script;
-	assert(p >= script);
-	while ((size_t)(p-script) < script_size) {
-		p = memchr(p, 0, script_size-(p-script)-2);
+	while (offset < script_size && script_size - offset > 2) {
+		p = memchr(script + offset, 0, script_size - offset - 2);
 		if (!p) {
 			break;
 		}
@@ -345,13 +349,13 @@ static const zend_encoding *zend_multibyte_detect_utf_encoding(const unsigned ch
 		}
 
 		/* searching for UTF-32 specific byte orders, so this will do */
-		p += 4;
+		offset = p - script + 4;
 	}
 
 	/* BE or LE? */
-	p = script;
-	assert(p >= script);
-	while ((size_t)(p-script) < script_size) {
+	offset = 0;
+	while (script_size - offset >= (size_t) wchar_size) {
+		p = script + offset;
 		if (*p == '\0' && *(p+wchar_size-1) != '\0') {
 			/* BE */
 			le = 0;
@@ -361,7 +365,7 @@ static const zend_encoding *zend_multibyte_detect_utf_encoding(const unsigned ch
 			le = 1;
 			break;
 		}
-		p += wchar_size;
+		offset += wchar_size;
 	}
 
 	if (wchar_size == 2) {
@@ -590,6 +594,43 @@ ZEND_API zend_result open_file_for_scanning(zend_file_handle *file_handle)
 	return SUCCESS;
 }
 
+static zend_op_array *zend_compile_ast_internal(int type)
+{
+	ZEND_ASSERT(CG(in_compilation));
+	ZEND_ASSERT(CG(ast));
+
+	uint32_t last_lineno = CG(zend_lineno);
+	zend_file_context original_file_context;
+	zend_oparray_context original_oparray_context;
+	zend_op_array *original_active_op_array = CG(active_op_array);
+
+	zend_op_array *op_array = emalloc(sizeof(*op_array));
+	init_op_array(op_array, type, INITIAL_OP_ARRAY_SIZE);
+	CG(active_op_array) = op_array;
+
+	/* Use heap to not waste arena memory */
+	op_array->fn_flags |= ZEND_ACC_HEAP_RT_CACHE;
+
+	if (zend_ast_process) {
+		zend_ast_process(CG(ast));
+	}
+
+	zend_file_context_begin(&original_file_context);
+	zend_oparray_context_begin(&original_oparray_context, op_array);
+	zend_compile_top_stmt(CG(ast));
+	CG(zend_lineno) = last_lineno;
+	zend_emit_final_return(type == ZEND_USER_FUNCTION);
+	op_array->line_start = 1;
+	op_array->line_end = last_lineno;
+	pass_two(op_array);
+	zend_oparray_context_end(&original_oparray_context);
+	zend_file_context_end(&original_file_context);
+
+	CG(active_op_array) = original_active_op_array;
+
+	return op_array;
+}
+
 static zend_op_array *zend_compile(zend_function_type type)
 {
 	zend_op_array *op_array = NULL;
@@ -600,34 +641,7 @@ static zend_op_array *zend_compile(zend_function_type type)
 	CG(ast_arena) = zend_arena_create(1024 * 32);
 
 	if (!zendparse()) {
-		uint32_t last_lineno = CG(zend_lineno);
-		zend_file_context original_file_context;
-		zend_oparray_context original_oparray_context;
-		zend_op_array *original_active_op_array = CG(active_op_array);
-
-		op_array = emalloc(sizeof(zend_op_array));
-		init_op_array(op_array, type, INITIAL_OP_ARRAY_SIZE);
-		CG(active_op_array) = op_array;
-
-		/* Use heap to not waste arena memory */
-		op_array->fn_flags |= ZEND_ACC_HEAP_RT_CACHE;
-
-		if (zend_ast_process) {
-			zend_ast_process(CG(ast));
-		}
-
-		zend_file_context_begin(&original_file_context);
-		zend_oparray_context_begin(&original_oparray_context, op_array);
-		zend_compile_top_stmt(CG(ast));
-		CG(zend_lineno) = last_lineno;
-		zend_emit_final_return(type == ZEND_USER_FUNCTION);
-		op_array->line_start = 1;
-		op_array->line_end = last_lineno;
-		pass_two(op_array);
-		zend_oparray_context_end(&original_oparray_context);
-		zend_file_context_end(&original_file_context);
-
-		CG(active_op_array) = original_active_op_array;
+		op_array = zend_compile_ast_internal(type);
 	}
 
 	zend_ast_destroy(CG(ast));
@@ -667,6 +681,23 @@ ZEND_API zend_op_array *compile_file(zend_file_handle *file_handle, int type)
 	}
 
 	zend_restore_lexical_state(&original_lex_state);
+	return op_array;
+}
+
+ZEND_API zend_op_array *zend_compile_ast(
+	zend_ast *ast, int type, zend_string *filename)
+{
+	zend_string *original_compiled_filename = CG(compiled_filename);
+	bool original_in_compilation = CG(in_compilation);
+	CG(in_compilation) = true;
+	CG(ast) = ast;
+
+	zend_set_compiled_filename(filename);
+	zend_op_array *op_array = zend_compile_ast_internal(type);
+
+	CG(in_compilation) = original_in_compilation;
+	zend_restore_compiled_filename(original_compiled_filename);
+
 	return op_array;
 }
 
@@ -720,7 +751,7 @@ zend_op_array *compile_filename(int type, zend_string *filename)
 			file_handle.opened_path = opened_path = zend_string_copy(filename);
 		}
 
-		zend_hash_add_empty_element(&EG(included_files), file_handle.opened_path);
+		zend_hash_add_empty_element(RMG(included_files), file_handle.opened_path);
 
 		if (opened_path) {
 			zend_string_release_ex(opened_path, 0);

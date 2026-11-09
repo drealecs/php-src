@@ -19,10 +19,8 @@
 #include <unicode/ustring.h>
 #include <math.h>
 
-extern "C" {
 #include "php_intl.h"
 #include "intl_convert.h"
-}
 #include "dateformat.h"
 #include "dateformat_class.h"
 #include "dateformat_data.h"
@@ -43,10 +41,19 @@ static void internal_parse_to_timestamp(IntlDateFormatter_object *dfo, const cha
 	/* Convert timezone to UTF-16. */
 	intl_convert_utf8_to_utf16(&text_utf16, &text_utf16_len, text_to_parse, text_len, &INTL_DATA_ERROR_CODE(dfo));
 	INTL_METHOD_CHECK_STATUS(dfo, "Error converting timezone to UTF-16" );
+	if (parse_pos && !intl_convert_utf8_offset_to_utf16(text_to_parse, text_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo))) {
+		if (text_utf16) {
+			efree(text_utf16);
+		}
+		INTL_METHOD_CHECK_STATUS(dfo, "Invalid UTF-8 offset" );
+	}
 
 	if (UNEXPECTED(update_calendar)) {
 		UCalendar *parsed_calendar = (UCalendar *)udat_getCalendar(DATE_FORMAT_OBJECT(dfo));
 		udat_parseCalendar(DATE_FORMAT_OBJECT(dfo), parsed_calendar, text_utf16, text_utf16_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo));
+		if (parse_pos) {
+			*parse_pos = intl_convert_utf16_offset_to_utf8(text_utf16, text_utf16_len, *parse_pos);
+		}
 		if (text_utf16) {
 			efree(text_utf16);
 		}
@@ -54,6 +61,9 @@ static void internal_parse_to_timestamp(IntlDateFormatter_object *dfo, const cha
 		timestamp = ucal_getMillis( parsed_calendar, &INTL_DATA_ERROR_CODE(dfo));
 	} else {
 		timestamp = udat_parse(DATE_FORMAT_OBJECT(dfo), text_utf16, text_utf16_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo));
+		if (parse_pos) {
+			*parse_pos = intl_convert_utf16_offset_to_utf8(text_utf16, text_utf16_len, *parse_pos);
+		}
 		if (text_utf16) {
 			efree(text_utf16);
 		}
@@ -97,9 +107,18 @@ static void internal_parse_to_localtime(IntlDateFormatter_object *dfo, const cha
 	/* Convert timezone to UTF-16. */
 	intl_convert_utf8_to_utf16(&text_utf16, &text_utf16_len, text_to_parse, text_len, &INTL_DATA_ERROR_CODE(dfo));
 	INTL_METHOD_CHECK_STATUS(dfo, "Error converting timezone to UTF-16" );
+	if (parse_pos && !intl_convert_utf8_offset_to_utf16(text_to_parse, text_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo))) {
+		if (text_utf16) {
+			efree(text_utf16);
+		}
+		INTL_METHOD_CHECK_STATUS(dfo, "Invalid UTF-8 offset" );
+	}
 
 	parsed_calendar = (UCalendar *)udat_getCalendar(DATE_FORMAT_OBJECT(dfo));
 	udat_parseCalendar( DATE_FORMAT_OBJECT(dfo), parsed_calendar, text_utf16, text_utf16_len, parse_pos, &INTL_DATA_ERROR_CODE(dfo));
+	if (parse_pos) {
+		*parse_pos = intl_convert_utf16_offset_to_utf8(text_utf16, text_utf16_len, *parse_pos);
+	}
 
 	if (text_utf16) {
 		efree(text_utf16);
@@ -153,7 +172,7 @@ U_CFUNC PHP_FUNCTION(datefmt_parse)
 			zend_argument_type_error(hasThis() ? 2 : 3, "must be of type int, %s given", zend_zval_value_name(z_parse_pos));
 			RETURN_THROWS();
 		}
-		if (ZEND_LONG_INT_OVFL(long_parse_pos)) {
+		if (ZEND_LONG_EXCEEDS_INT(long_parse_pos)) {
 			intl_error_set_code(NULL, U_ILLEGAL_ARGUMENT_ERROR);
 			intl_error_set_custom_msg(NULL, "String index is out of valid range.");
 			RETURN_FALSE;
@@ -196,7 +215,7 @@ U_CFUNC PHP_METHOD(IntlDateFormatter, parseToCalendar)
 			zend_argument_type_error(2, "must be of type int, %s given", zend_zval_value_name(z_parse_pos));
 			RETURN_THROWS();
 		}
-		if (ZEND_LONG_INT_OVFL(long_parse_pos)) {
+		if (ZEND_LONG_EXCEEDS_INT(long_parse_pos)) {
 			intl_error_set_code(NULL, U_ILLEGAL_ARGUMENT_ERROR);
 			intl_error_set_custom_msg(NULL, "String index is out of valid range.");
 			RETURN_FALSE;
@@ -238,7 +257,7 @@ U_CFUNC PHP_FUNCTION(datefmt_localtime)
 			zend_argument_type_error(hasThis() ? 2 : 3, "must be of type int, %s given", zend_zval_value_name(z_parse_pos));
 			RETURN_THROWS();
 		}
-		if (ZEND_LONG_INT_OVFL(long_parse_pos)) {
+		if (ZEND_LONG_EXCEEDS_INT(long_parse_pos)) {
 			intl_error_set_code(NULL, U_ILLEGAL_ARGUMENT_ERROR);
 			intl_error_set_custom_msg(NULL, "String index is out of valid range.");
 			RETURN_FALSE;

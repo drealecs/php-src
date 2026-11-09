@@ -25,6 +25,7 @@
 #include "zend_closures.h"
 #include "zend_extensions.h"
 #include "zend_modules.h"
+#include "zend_runtime_module.h"
 #include "zend_shared_alloc.h"
 #include "zend_accelerator_blacklist.h"
 #include "zend_file_cache.h"
@@ -41,7 +42,7 @@
 
 #define STRING_NOT_NULL(s) (NULL == (s)?"":s)
 #define MIN_ACCEL_FILES 200
-#define MAX_ACCEL_FILES 1000000
+#define MAX_ACCEL_FILES 1048793
 /* Max value of opcache.interned_strings_buffer */
 #define MAX_INTERNED_STRINGS_BUFFER_SIZE ((zend_long)MIN( \
 	MIN( \
@@ -76,7 +77,9 @@ static bool validate_api_restriction(void)
 
 static ZEND_INI_MH(OnUpdateMemoryConsumption)
 {
-	if (accel_startup_ok) {
+	/* On ZTS, each new thread runs the on_modify handlers at STAGE_STARTUP to
+	 * populate its own globals; that is thread init, not a post-startup change. */
+	if (accel_startup_ok && stage != ZEND_INI_STAGE_STARTUP) {
 		if (strcmp(sapi_module.name, "fpm-fcgi") == 0) {
 			zend_accel_error(ACCEL_LOG_WARNING, "opcache.memory_consumption cannot be changed when OPcache is already set up. Are you using php_admin_value[opcache.memory_consumption] in an individual pool's configuration?\n");
 		} else {
@@ -102,6 +105,20 @@ static ZEND_INI_MH(OnUpdateMemoryConsumption)
 
 static ZEND_INI_MH(OnUpdateInternedStringsBuffer)
 {
+	/* Under ZTS, every thread started later re-applies the INI entries at
+	 * ZEND_INI_STAGE_STARTUP to fill its own globals. Accepting that is safe: the
+	 * value comes from the global INI directives, so it is the one OPcache was
+	 * set up with. NTS does not have this problem: STARTUP handlers run before
+	 * accel_startup_ok is set, and accel_shutdown() clears it again. */
+	if (accel_startup_ok && stage != ZEND_INI_STAGE_STARTUP) {
+		if (strcmp(sapi_module.name, "fpm-fcgi") == 0) {
+			zend_accel_error(ACCEL_LOG_WARNING, "opcache.interned_strings_buffer cannot be changed when OPcache is already set up. Are you using php_admin_value[opcache.interned_strings_buffer] in an individual pool's configuration?\n");
+		} else {
+			zend_accel_error(ACCEL_LOG_WARNING, "opcache.interned_strings_buffer cannot be changed when OPcache is already set up.\n");
+		}
+		return FAILURE;
+	}
+
 	zend_long *p = ZEND_INI_GET_ADDR();
 	zend_long size = zend_ini_parse_quantity_warn(new_value, entry->name);
 
@@ -131,6 +148,23 @@ static ZEND_INI_MH(OnUpdateMaxAcceleratedFiles)
 	if (size > MAX_ACCEL_FILES) {
 		zend_accel_error(ACCEL_LOG_WARNING, "opcache.max_accelerated_files is set above the limit (%d).\n", MAX_ACCEL_FILES);
 		return FAILURE;
+	}
+	if (
+		size != 223
+		&& size != 463
+		&& size != 983
+		&& size != 1979
+		&& size != 3907
+		&& size != 7963
+		&& size != 16229
+		&& size != 32531
+		&& size != 65407
+		&& size != 130987
+		&& size != 262237
+		&& size != 524521
+		&& size != 1048793
+	) {
+		zend_accel_error(ACCEL_LOG_WARNING, "opcache.max_accelerated_files should be a value in {223, 463, 983, 1979, 3907, 7963, 16229, 32531, 65407, 130987, 262237, 524521, 1048793}.\n");
 	}
 	*p = size;
 	return SUCCESS;
@@ -293,7 +327,7 @@ ZEND_INI_BEGIN()
 	STD_PHP_INI_ENTRY("opcache.log_verbosity_level"   , "1"   , PHP_INI_SYSTEM, OnUpdateLong, accel_directives.log_verbosity_level,       zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.memory_consumption"    , "128"  , PHP_INI_SYSTEM, OnUpdateMemoryConsumption,    accel_directives.memory_consumption,        zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.interned_strings_buffer", "8"  , PHP_INI_SYSTEM, OnUpdateInternedStringsBuffer,	 accel_directives.interned_strings_buffer,   zend_accel_globals, accel_globals)
-	STD_PHP_INI_ENTRY("opcache.max_accelerated_files" , "10000", PHP_INI_SYSTEM, OnUpdateMaxAcceleratedFiles,	 accel_directives.max_accelerated_files,     zend_accel_globals, accel_globals)
+	STD_PHP_INI_ENTRY("opcache.max_accelerated_files" , "16229", PHP_INI_SYSTEM, OnUpdateMaxAcceleratedFiles,	 accel_directives.max_accelerated_files,     zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.max_wasted_percentage" , "5"   , PHP_INI_SYSTEM, OnUpdateMaxWastedPercentage,	 accel_directives.max_wasted_percentage,     zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.force_restart_timeout" , "180" , PHP_INI_SYSTEM, OnUpdateLong,	             accel_directives.force_restart_timeout,     zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.revalidate_freq"       , "2"   , PHP_INI_ALL   , OnUpdateLong,	             accel_directives.revalidate_freq,           zend_accel_globals, accel_globals)
@@ -969,6 +1003,11 @@ ZEND_FUNCTION(opcache_compile_file)
 
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "S", &script_name) == FAILURE) {
 		RETURN_THROWS();
+	}
+	if (zend_runtime_context_is_module_sensitive(zend_get_current_runtime_context())) {
+		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME
+			" cannot compile files in a module-sensitive runtime context");
+		RETURN_FALSE;
 	}
 
 	if (!accel_startup_ok) {
