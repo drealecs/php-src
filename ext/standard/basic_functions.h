@@ -60,6 +60,8 @@ typedef struct _php_basic_globals {
 	size_t strtok_len;
 	zend_fcall_info user_compare_fci;
 	zend_fcall_info_cache user_compare_fci_cache;
+	/* Function checked for zend_call_known_user_function_with_2_params(), or NULL. */
+	zend_function *user_compare_known_func;
 	zend_llist *user_tick_functions;
 
 	zval active_ini_file_section;
